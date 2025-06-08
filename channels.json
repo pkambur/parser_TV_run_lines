@@ -1,0 +1,52 @@
+{
+    "RBK": {
+        "url": "https://e2-online-video.rbc.ru/online2/rbctvhd_1080p/index.m3u8?e=e2&t=Izzi0I",
+        "interval": "1/7",
+        "crop": "crop=1500:45:330:960"
+    },
+    "NTV": {
+        "url": "https://river-1.rutube.ru/stream/genetta-521.ost.rutube.ru/scQmYGtQxAGuPUX6d0qN7g/1737020538/c37cd74192c6bc3d6cd6077c0c4fd686/1080p_stream.m3u8",
+        "interval": "1/10",
+        "crop": "crop=1915:50:2:910"
+    },
+    "360": {
+        "url": "https://e10-ll.facecast.io/evacoder_hls_hi/UBZfFgtKB1JwTwoDERNQVGGs/1.m3u8",
+        "interval": "1/7",
+        "crop": "crop=1110:45:120:640"
+    },
+    "Звезда": {
+        "url": "https://tvzvezda.bonus-tv.ru/cdn/tvzvezda/playlist.m3u8",
+        "interval": "1/12",
+        "crop": "crop=1610:60:570:970"
+    },
+    "MIR24": {
+        "url": "https://hls-mirtv.cdnvideo.ru/mirtv-parampublish/mir24_2500/tracks-v1a1/mono.m3u8?hls_proxy_host=fcf2a4d016d46058e02842aa89871fce",
+        "interval": "1/7",
+        "crop": "crop=1405:55:515:980"
+    },
+    "Известия": {
+        "url": "http://hls-igi.cdnvideo.ru/igi/igi_hq/tracks-v1a1/mono.m3u8?hls_proxy_host=f4eb0d287702d48f6bbf6e6f56891e63",
+        "interval": "1/11",
+        "crop": "crop=1590:50:320:1000"
+    },
+    "R1": {
+        "url": "https://vgtrkregion-reg.cdnvideo.ru/vgtrk/0/russia1-hd/1080p.m3u8",
+        "interval": "1/11",
+        "crop": "crop=1680:40:1420:980"
+    },
+    "ТВЦ": {
+        "url": "https://tvc-hls.cdnvideo.ru/tvc-res/smil:vd9221_2.smil/12ed865707c77a12eeecfa3177775684--tvc-res--vd9221_480p_2--tracks-v1a1--mono.m3u8",
+        "interval": "1/8",
+        "crop": "crop=1813:60:320:960"
+    },
+    "R24_white_line": {
+        "url": "https://vgtrkregion-reg.cdnvideo.ru/vgtrk/0/russia24-sd/2081200_576p.m3u8",
+        "interval": "1/12",
+        "crop": "crop=1020:30:2:530"
+    },
+    "R24_blue_line": {
+        "url": "https://vgtrkregion-reg.cdnvideo.ru/vgtrk/0/russia24-sd/2081200_576p.m3u8",
+        "interval": "1/10",
+        "crop": "crop=1020:30:2:500"
+    }
+}
