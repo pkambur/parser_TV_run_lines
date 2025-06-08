@@ -89,4 +89,51 @@ def stop_rbk_mir24(app, ui):
     ui.status_label.config(text="Состояние: Парсинг РБК и МИР24 остановлен")
     ui.rbk_mir24_button.config(state="normal")
     ui.stop_rbk_mir24_button.config(state="disabled")
-    # При необходимо
+
+    # Попытка отменить задачу, если она существует и активна
+    if hasattr(app, 'rbk_mir24_task') and app.rbk_mir24_task:
+        if not app.rbk_mir24_task.done():
+            logger.info("Отмена асинхронной задачи РБК/МИР24")
+            app.loop.call_soon_threadsafe(app.rbk_mir24_task.cancel)
+        app.rbk_mir24_task = None
+
+def save_to_csv(app, ui, process_screenshots, send_files):
+    logger = logging.getLogger(__name__)
+    logger.info("Сохранение строк остальных каналов")
+    ui.status_label.config(text="Состояние: Обработка остальных каналов...")
+    try:
+        output_file, screenshot_files = process_screenshots()
+        send_files(output_file, screenshot_files)
+        ui.status_label.config(text="Состояние: Сохранение остальных каналов завершено")
+        logger.info(f"Сохранение строк остальных каналов завершено в {output_file}")
+    except Exception as e:
+        logger.error(f"Ошибка при сохранении остальных каналов: {e}")
+        ui.status_label.config(text=f"Состояние: Ошибка: {str(e)}")
+
+async def send_strings_async(app, ui, send_to_telegram):
+    logger = logging.getLogger(__name__)
+    logger.info("Отправка строк в Telegram")
+    ui.status_label.config(text="Состояние: Отправка строк...")
+    ui.send_strings_button.config(state="disabled")
+    try:
+        await send_to_telegram()  # Вызов асинхронной функции
+        ui.status_label.config(text="Состояние: Отправка строк завершена")
+        logger.info("Отправка строк в Telegram завершена")
+    except Exception as e:
+        logger.error(f"Ошибка при отправке строк в Telegram: {e}")
+        ui.status_label.config(text=f"Состояние: Ошибка: {str(e)}")
+    finally:
+        ui.send_strings_button.config(state="normal")
+
+def send_strings(app, ui, send_to_telegram):
+    if app.loop and app.loop.is_running():
+        # Если цикл уже запущен, используем его
+        asyncio.run_coroutine_threadsafe(send_strings_async(app, ui, send_to_telegram), app.loop)
+    else:
+        # Создаем новый цикл для выполнения асинхронной функции
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+        try:
+            loop.run_until_complete(send_strings_async(app, ui, send_to_telegram))
+        finally:
+            loop.close()
