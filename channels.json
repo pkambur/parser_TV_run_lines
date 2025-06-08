@@ -35,7 +35,7 @@
         "crop": "crop=1680:40:1420:980"
     },
     "ТВЦ": {
-        "url": "https://tvc-hls.cdnvideo.ru/tvc-res/smil:vd9221_2.smil/12ed865707c77a12eeecfa3177775684--tvc-res--vd9221_480p_2--tracks-v1a1--mono.m3u8",
+        "url": "https://live-mirror-01.ott.tricolor.tv/live/live/TV_Center_HD/hls_enc/TV_Center_HD.m3u8",
         "interval": "1/8",
         "crop": "crop=1813:60:320:960"
     },
@@ -48,5 +48,15 @@
         "url": "https://vgtrkregion-reg.cdnvideo.ru/vgtrk/0/russia24-sd/2081200_576p.m3u8",
         "interval": "1/10",
         "crop": "crop=1020:30:2:500"
+    },
+    "RenTV": {
+        "url": "http://live-stream-09.ott.tricolor.tv/live/live/REN-TV_0_hd/hls_enc/REN-TV_0_hd-avc1_2000000=10004_mp4a_59200_rus=20000.m3u8",
+        "interval": "1/11",
+        "crop": "crop=1590:50:320:1000"
+    },
+    "5 kanal": {
+        "url": "https://live-stream-09.ott.tricolor.tv/live/live/5_kanal/hls_enc/5_kanal-avc1_2000000=10002_mp4a_59200_rus=20000.m3u8",
+        "interval": "1/12",
+        "crop": "crop=1610:60:570:970"
     }
 }
