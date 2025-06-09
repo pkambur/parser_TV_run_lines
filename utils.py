@@ -90,34 +90,15 @@ def send_strings(app, ui, callback):
 
 
 def run_async_task(app, coro):
-    """Запуск асинхронной задачи в цикле событий."""
-
+    """Запуск асинхронной задачи в цикле событий без блокировки UI."""
     def wrapper():
         loop = app.ensure_loop()
-        task = None
         try:
-            logger.info(f"Запуск асинхронной задачи: {coro.__name__}")
+            logger.info(f"Запуск асинхронной задачи: {getattr(coro, '__name__', str(coro))}")
             task = loop.create_task(coro)
-            # Запускаем задачу в цикле событий без блокировки
-            future = asyncio.run_coroutine_threadsafe(task, loop)
-            future.result(timeout=600)  # Ожидаем завершения с таймаутом 10 минут
-            logger.info(f"Асинхронная задача {coro.__name__} завершена")
-        except asyncio.TimeoutError:
-            logger.error(f"Таймаут при выполнении задачи {coro.__name__}")
-            if task:
-                task.cancel()
-            app.ui.status_label.config(text=f"Состояние: Таймаут задачи {coro.__name__}")
-        except asyncio.CancelledError:
-            logger.info(f"Задача {coro.__name__} отменена")
-            app.ui.status_label.config(text=f"Состояние: Задача {coro.__name__} отменена")
         except Exception as e:
-            logger.error(f"Ошибка при выполнении задачи {coro.__name__}: {e}")
+            logger.error(f"Ошибка при запуске задачи {getattr(coro, '__name__', str(coro))}: {e}")
             app.ui.status_label.config(text=f"Состояние: Ошибка: {str(e)}")
-        finally:
-            if task and not task.done():
-                task.cancel()
-            logger.info(f"Очистка задачи {coro.__name__}")
-
     return wrapper
 
 

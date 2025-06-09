@@ -16,6 +16,8 @@ class MonitoringApp:
         self.parser_task = None
         self.rbk_mir24_task = None
         self.asyncio_thread = None
+        self.rbk_mir24_running = False  # флаг выполнения записи РБК и МИР24
+
 
         # Передаем асинхронные обработчики в UI
         self.ui = MonitoringUI(
@@ -45,21 +47,24 @@ class MonitoringApp:
         return self.loop
 
     def start_rbk_mir24_task(self):
-        """Запускает задачу обработки РБК и МИР24."""
+        """Запускает задачу обработки РБК и МИР24 через run_async_task."""
         self.logger.info("Попытка запуска задачи РБК и МИР24")
-        if self.rbk_mir24_task and not self.rbk_mir24_task.done():
+
+        if self.rbk_mir24_running:
             self.logger.warning("Задача РБК и МИР24 уже выполняется")
             self.ui.status_label.config(text="Состояние: Предыдущая запись еще выполняется")
             return
-        self.rbk_mir24_task = None  # Сбрасываем задачу
-        coro = process_rbk_mir24(self, self.ui, send_files)
-        loop = self.ensure_loop()
-        try:
-            self.rbk_mir24_task = loop.create_task(coro)
-            self.logger.info("Задача обработки РБК и МИР24 успешно запущена")
-        except Exception as e:
-            self.logger.error(f"Ошибка при запуске задачи РБК и МИР24: {e}")
-            self.ui.status_label.config(text=f"Состояние: Ошибка: {str(e)}")
+
+        self.rbk_mir24_running = True
+
+        async def wrapped_task():
+            try:
+                await process_rbk_mir24(self, self.ui, send_files)
+            finally:
+                self.rbk_mir24_running = False
+                self.logger.info("Флаг rbk_mir24_running сброшен после завершения задачи")
+
+        run_async_task(self, wrapped_task)()  # запускаем wrapper-функцию
 
     def run(self):
         try:
@@ -70,6 +75,11 @@ class MonitoringApp:
                 self.loop.stop()
                 self.loop.close()
             raise
+
+    def cleanup_tasks(self):
+        """Очищает завершенные задачи, если необходимо."""
+        if self.rbk_mir24_task and self.rbk_mir24_task.done():
+            self.rbk_mir24_task = None
 
 if __name__ == "__main__":
     try:
