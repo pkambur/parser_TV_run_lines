@@ -19,7 +19,24 @@ logger = logging.getLogger(__name__)
 subprocesses = []
 
 
+def parse_interval(interval_str):
+    """Парсит строку интервала (например, '1/7') и возвращает количество секунд."""
+    try:
+        if not interval_str or '/' not in interval_str:
+            logger.warning(f"Некорректный формат интервала: {interval_str}. Используется 10 секунд.")
+            return 10
+        numerator, denominator = interval_str.split('/')
+        interval = int(denominator) / int(numerator)
+        if interval <= 0:
+            raise ValueError("Интервал должен быть положительным")
+        return interval
+    except (ValueError, TypeError) as e:
+        logger.error(f"Ошибка парсинга интервала {interval_str}: {e}. Используется 10 секунд.")
+        return 10
+
+
 async def run_ffmpeg(channel_name, channel_info):
+    """Запускает FFmpeg для создания скриншота с указанного URL."""
     try:
         output_dir = os.path.join("screenshots", channel_name)
         os.makedirs(output_dir, exist_ok=True)
@@ -35,7 +52,7 @@ async def run_ffmpeg(channel_name, channel_info):
             "-q:v", "2"
         ]
 
-        # Добавляем обрезку, если указано в channel_info
+        # Добавляем обрезку, если указано
         if "crop" in channel_info:
             cmd.extend(["-vf", channel_info["crop"]])
 
@@ -58,15 +75,31 @@ async def run_ffmpeg(channel_name, channel_info):
         logger.error(f"Ошибка при создании скриншота для {channel_name}: {e}")
 
 
+async def process_channel(channel):
+    """Запускает цикл создания скриншотов для одного канала с заданным интервалом."""
+    channel_name = channel["name"]
+    interval = parse_interval(channel.get("interval", "1/10"))
+    logger.info(f"Запуск обработки канала {channel_name} с интервалом {interval} секунд")
+
+    try:
+        while True:
+            await run_ffmpeg(channel_name, channel)
+            await asyncio.sleep(interval)
+    except asyncio.CancelledError:
+        logger.info(f"Обработка канала {channel_name} остановлена")
+        raise
+
+
 async def stop_subprocesses():
+    """Завершает все подпроцессы FFmpeg."""
     logger.info("Завершение всех подпроцессов FFmpeg")
     try:
         for process in subprocesses:
-            if process.returncode is None:  # Проверяем, что процесс еще активен
+            if process.returncode is None:  # Проверяем, что процесс активен
                 try:
                     logger.info(f"Завершение процесса: {process.pid}")
-                    process.terminate()  # Пытаемся завершить мягко
-                    await asyncio.sleep(1)  # Ждем немного
+                    process.terminate()  # Мягкое завершение
+                    await asyncio.sleep(1)
                     if process.returncode is None:
                         logger.warning(f"Процесс {process.pid} не завершился, принудительное завершение")
                         process.kill()  # Принудительное завершение
@@ -78,6 +111,7 @@ async def stop_subprocesses():
 
 
 async def main():
+    """Основная функция для запуска парсинга всех каналов."""
     try:
         if not os.path.exists("channels.json"):
             logger.error("Файл channels.json не найден")
@@ -93,7 +127,7 @@ async def main():
                 logger.error(f"Ошибка формата JSON в channels.json: {e}")
                 raise
 
-        # Преобразуем словарь в список для удобства обработки
+        # Преобразуем словарь в список каналов
         channels = [
             {"name": name, "url": info["url"], "interval": info.get("interval"), "crop": info.get("crop")}
             for name, info in channels_data.items()
@@ -104,12 +138,23 @@ async def main():
             raise ValueError("Список каналов пуст")
 
         logger.info(f"Загружены каналы: {channels}")
-        while True:
-            logger.info("Запуск цикла парсинга")
-            tasks = [run_ffmpeg(channel["name"], channel) for channel in channels]
+
+        # Создаем отдельную задачу для каждого канала
+        tasks = [asyncio.create_task(process_channel(channel)) for channel in channels]
+
+        try:
             await asyncio.gather(*tasks, return_exceptions=True)
-            # Используем фиксированный интервал 10 секунд, можно сделать настраиваемым
-            await asyncio.sleep(10)
+        except asyncio.CancelledError:
+            logger.info("Парсинг строк остановлен")
+            for task in tasks:
+                task.cancel()
+                try:
+                    await task
+                except asyncio.CancelledError:
+                    pass
+            await stop_subprocesses()
+            raise
+
     except asyncio.CancelledError:
         logger.info("Парсинг строк остановлен")
         await stop_subprocesses()

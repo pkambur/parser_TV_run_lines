@@ -9,6 +9,7 @@ import json
 from datetime import datetime
 import shutil
 import asyncio
+import subprocess
 
 # Настройка логирования
 logger = logging.getLogger(__name__)
@@ -17,10 +18,16 @@ logger = logging.getLogger(__name__)
 base_dir = "screenshots"
 processed_dir = "screenshots_processed"
 
+# Длительность записи видео (в секундах)
+VIDEO_DURATION = 240  # 4 минуты
+# Интервал извлечения кадров для распознавания текста (в секундах)
+FRAME_INTERVAL = 10
+
 # Загрузка ключевых слов из файла keywords.json
 try:
     with open("keywords.json", "r", encoding="utf-8") as f:
-        keywords = json.load(f)
+        data = json.load(f)
+        keywords = data.get("keywords", [])
     logger.info(f"Ключевые слова успешно загружены: {keywords}")
 except FileNotFoundError:
     logger.error("Файл keywords.json не найден")
@@ -29,14 +36,73 @@ except Exception as e:
     logger.error(f"Ошибка при загрузке keywords.json: {e}")
     keywords = []
 
-# Предобработка изображения
-def preprocess_image(image_path):
+
+# Загрузка channels.json для получения URL и crop
+async def load_channels():
     try:
-        img = cv2.imread(image_path)
-        if img is None:
-            logger.error(f"Не удалось загрузить изображение: {image_path}")
+        with open("channels.json", "r", encoding="utf-8") as f:
+            channels_data = json.load(f)
+        return channels_data
+    except FileNotFoundError:
+        logger.error("Файл channels.json не найден")
+        return {}
+    except json.JSONDecodeError as e:
+        logger.error(f"Ошибка формата JSON в channels.json: {e}")
+        return {}
+
+
+# Запись видеопотока
+async def record_video(channel_name, channel_info):
+    try:
+        output_dir = os.path.join(base_dir, channel_name)
+        os.makedirs(output_dir, exist_ok=True)
+
+        timestamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
+        output_path = os.path.join(output_dir, f"{channel_name}_video_{timestamp}.mp4")
+
+        # Команда FFmpeg для записи видео
+        cmd = [
+            "ffmpeg",
+            "-i", channel_info["url"],
+            "-t", str(VIDEO_DURATION),  # Длительность записи
+            "-c:v", "libx264",  # Кодек видео
+            "-c:a", "aac",  # Кодек аудио
+            "-y"  # Перезаписывать файл, если существует
+        ]
+
+        # Добавляем обрезку, если указано
+        if "crop" in channel_info:
+            cmd.extend(["-vf", channel_info["crop"]])
+
+        cmd.append(output_path)
+
+        logger.info(f"Запуск записи видео для {channel_name}: {' '.join(cmd)}")
+        process = await asyncio.create_subprocess_exec(
+            *cmd,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE
+        )
+
+        stdout, stderr = await process.communicate()
+        if process.returncode != 0:
+            error_msg = stderr.decode()
+            logger.error(f"Ошибка ffmpeg при записи видео для {channel_name}: {error_msg}")
+            return None, error_msg
+        else:
+            logger.info(f"Видео сохранено: {output_path}")
+            return output_path, None
+    except Exception as e:
+        logger.error(f"Ошибка при записи видео для {channel_name}: {e}")
+        return None, str(e)
+
+
+# Предобработка кадра
+def preprocess_frame(frame):
+    try:
+        if frame is None:
+            logger.error("Не удалось загрузить кадр")
             return None
-        gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+        gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
         gray = cv2.convertScaleAbs(gray, alpha=2.0, beta=10)
         gray = cv2.adaptiveThreshold(
             gray, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C, cv2.THRESH_BINARY, 15, 5
@@ -44,19 +110,20 @@ def preprocess_image(image_path):
         gray = cv2.fastNlMeansDenoising(gray, h=10)
         return gray
     except Exception as e:
-        logger.error(f"Ошибка при обработке изображения {image_path}: {e}")
+        logger.error(f"Ошибка при обработке кадра: {e}")
         return None
 
-# Распознавание текста
-def recognize_text(image_path):
+
+# Распознавание текста из кадра
+def recognize_text_from_frame(frame):
     try:
-        processed_img = preprocess_image(image_path)
-        if processed_img is None:
+        processed_frame = preprocess_frame(frame)
+        if processed_frame is None:
             return ""
         custom_config = r'--oem 3 --psm 6 -l rus+eng --dpi 600'
-        text = pytesseract.image_to_string(processed_img, config=custom_config)
+        text = pytesseract.image_to_string(processed_frame, config=custom_config)
         text = text.strip()
-        logger.info(f"Распознанный текст для {image_path}: '{text}'")
+        logger.info(f"Распознанный текст: '{text}'")
         valid_text_pattern = re.compile(r'^[a-zA-Zа-яА-Я0-9,.!?\-\s:«»()]+$', re.UNICODE)
         meaningful_text_pattern = re.compile(r'[a-zA-Zа-яА-Я]{2,}')
         if text and valid_text_pattern.match(text) and meaningful_text_pattern.search(text):
@@ -66,8 +133,9 @@ def recognize_text(image_path):
             logger.warning(f"Текст не прошел фильтрацию: '{text}'")
             return text
     except Exception as e:
-        logger.error(f"Ошибка при распознавании текста в {image_path}: {e}")
+        logger.error(f"Ошибка при распознавании текста: {e}")
         return ""
+
 
 # Проверка наличия ключевых слов
 def has_keywords(text):
@@ -76,107 +144,121 @@ def has_keywords(text):
     logger.info(f"Проверка ключевых слов для '{text}': {result}")
     return result
 
-# Базовое объединение текста
-def combine_texts(screenshots_data):
-    combined_texts = []
-    for _, _, filename, text in screenshots_data:
-        logger.info(f"Обрабатываем текст из {filename}: '{text}'")
-        fragments = text.split("\n")
-        if any(has_keywords(fragment.strip()) for fragment in fragments if fragment.strip()):
-            combined_texts.append(text.strip())
-            logger.info(f"Сохранен полный текст: '{text.strip()}'")
-        else:
-            logger.info(f"Текст не содержит ключевых слов: '{text}'")
-    return combined_texts
+
+# Обработка видео: извлечение кадров и распознавание текста
+def process_video(video_path, channel_name):
+    try:
+        cap = cv2.VideoCapture(video_path)
+        if not cap.isOpened():
+            logger.error(f"Не удалось открыть видео: {video_path}")
+            return []
+
+        fps = cap.get(cv2.CAP_PROP_FPS)
+        frame_interval = int(fps * FRAME_INTERVAL)  # Интервал кадров для анализа
+        frame_count = 0
+        results = []
+
+        while cap.isOpened():
+            ret, frame = cap.read()
+            if not ret:
+                break
+            if frame_count % frame_interval == 0:
+                text = recognize_text_from_frame(frame)
+                if text and has_keywords(text):
+                    timestamp = datetime.now()
+                    results.append((video_path, timestamp, os.path.basename(video_path), text))
+            frame_count += 1
+            # Позволяем другим задачам выполняться
+            cv2.waitKey(1)
+
+        cap.release()
+        logger.info(f"Обработка видео {video_path} завершена: найдено {len(results)} текстов")
+        return results
+    except Exception as e:
+        logger.error(f"Ошибка при обработке видео {video_path}: {e}")
+        return []
+
 
 async def process_rbk_mir24(app, ui, send_files):
-    logger = logging.getLogger(__name__)
-    logger.info("Сохранение строк РБК и МИР24")
+    logger.info("Обработка видеопотоков РБК и МИР24")
     ui.status_label.config(text="Состояние: Обработка РБК и МИР24...")
     ui.rbk_mir24_button.config(state="disabled")
     ui.stop_rbk_mir24_button.config(state="normal")
+
     try:
         app.rbk_mir24_task = asyncio.current_task()  # Сохраняем текущую задачу
-        data = {"Channel": [], "Timestamp": [], "Text": [], "Screenshot": []}
+        data = {"Channel": [], "Timestamp": [], "Text": [], "Video": []}
+        channels_data = await load_channels()
         channels = ["RBK", "MIR24"]
 
-        if not os.path.exists(base_dir):
-            logger.error(f"Папка {base_dir} не найдена")
+        if not channels_data:
+            logger.error("Не удалось загрузить channels.json")
+            ui.status_label.config(text="Состояние: Ошибка: channels.json не найден")
             return None, None
 
+        os.makedirs(processed_dir, exist_ok=True)
+
         for channel_name in channels:
-            channel_dir = os.path.join(base_dir, channel_name)
-            if not os.path.isdir(channel_dir):
-                logger.warning(f"Папка {channel_dir} не найдена")
+            if channel_name not in channels_data:
+                logger.warning(f"Канал {channel_name} отсутствует в channels.json")
                 continue
 
-            logger.info(f"Обработка канала: {channel_name}")
-            screenshots = []
-            for filename in os.listdir(channel_dir):
-                if filename.endswith(".jpg"):
-                    image_path = os.path.join(channel_dir, filename)
-                    try:
-                        timestamp_str = filename.replace(f"{channel_name}_", "").replace(".jpg", "")
-                        timestamp = datetime.strptime(timestamp_str, "%Y-%m-%d_%H-%M-%S")
-                    except ValueError as e:
-                        logger.warning(f"Не удалось извлечь временную метку из {filename}: {e}")
-                        timestamp = datetime.now()
-                    text = recognize_text(image_path)
-                    screenshots.append((image_path, timestamp, filename, text))
-                    # Позволяем отмену задачи
-                    await asyncio.sleep(0)
+            channel_info = channels_data[channel_name]
+            logger.info(f"Запись видео для канала: {channel_name}")
 
-            screenshots.sort(key=lambda x: x[1])
-            i = 0
-            while i < len(screenshots):
-                group = [screenshots[i]]
-                timestamp = screenshots[i][1]
-                j = i + 1
-                while j < len(screenshots):
-                    time_diff = (screenshots[j][1] - timestamp).total_seconds()
-                    if time_diff > 2:
-                        break
-                    group.append(screenshots[j])
-                    j += 1
+            # Записываем видео
+            video_path, error_msg = await record_video(channel_name, channel_info)
+            if not video_path:
+                logger.error(f"Не удалось записать видео для {channel_name}: {error_msg}")
+                continue
 
-                logger.info(f"Группа скриншотов: {[item[2] for item in group]}")
-                combined_texts = combine_texts(group)
-                screenshot_files = [item[2] for item in group]
+            # Обрабатываем видео
+            results = process_video(video_path, channel_name)
+            if not results:
+                logger.warning(f"Нет распознанных текстов для {channel_name}")
+                continue
 
-                for combined_text in combined_texts:
-                    data["Channel"].append(channel_name)
-                    data["Timestamp"].append(timestamp)
-                    data["Text"].append(combined_text)
-                    data["Screenshot"].append(screenshot_files)
-                    for image_path, _, filename, _ in group:
-                        dest_path = os.path.join(processed_dir, filename)
-                        if os.path.exists(image_path):
-                            shutil.move(image_path, dest_path)
-                            logger.info(f"Скриншот перемещен в {dest_path}")
-                    # Позволяем отмену задачи
-                    await asyncio.sleep(0)
+            # Сохраняем результаты
+            for video_path, timestamp, filename, text in results:
+                data["Channel"].append(channel_name)
+                data["Timestamp"].append(timestamp)
+                data["Text"].append(text)
+                data["Video"].append(filename)
 
-                i = j
+                # Перемещаем видео в processed_dir
+                dest_path = os.path.join(processed_dir, filename)
+                if os.path.exists(video_path):
+                    shutil.move(video_path, dest_path)
+                    logger.info(f"Видео перемещено в {dest_path}")
+
+                await asyncio.sleep(0)  # Позволяем отмену задачи
+
+            await asyncio.sleep(0)  # Позволяем отмену задачи
 
         # Сохранение в CSV
-        timestamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
-        output_file = f"logs/recognized_text_rbk_mir24_{timestamp}.csv"
-        df = pd.DataFrame(data)
-        df.to_csv(output_file, index=False, encoding='utf-8-sig')
-        logger.info(f"Результаты РБК и МИР24 сохранены в {output_file}")
+        if data["Channel"]:
+            timestamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
+            output_file = f"logs/recognized_text_rbk_mir24_{timestamp}.csv"
+            df = pd.DataFrame(data)
+            df.to_csv(output_file, index=False, encoding='utf-8-sig')
+            logger.info(f"Результаты РБК и МИР24 сохранены в {output_file}")
 
-        # Отправка файлов в Telegram
-        if output_file and data["Screenshot"]:
-            await send_files(output_file, data["Screenshot"])
+            # Отправка файлов в Telegram
+            await send_files(output_file, data["Video"])
 
-        ui.status_label.config(text="Состояние: Сохранение РБК и МИР24 завершено")
-        return output_file, data["Screenshot"]
+            ui.status_label.config(text="Состояние: Сохранение РБК и МИР24 завершено")
+            return output_file, data["Video"]
+        else:
+            logger.warning("Нет данных для сохранения")
+            ui.status_label.config(text="Состояние: Нет данных для РБК и МИР24")
+            return None, None
+
     except asyncio.CancelledError:
         logger.info("Парсинг РБК и МИР24 остановлен")
         ui.status_label.config(text="Состояние: Парсинг РБК и МИР24 остановлен")
         raise
     except Exception as e:
-        logger.error(f"Ошибка при сохранении РБК и МИР24: {e}")
+        logger.error(f"Ошибка при обработке РБК и МИР24: {e}")
         ui.status_label.config(text=f"Состояние: Ошибка: {str(e)}")
         return None, None
     finally:
@@ -184,8 +266,8 @@ async def process_rbk_mir24(app, ui, send_files):
         ui.stop_rbk_mir24_button.config(state="disabled")
         app.rbk_mir24_task = None
 
+
 async def stop_rbk_mir24(app, ui):
-    logger = logging.getLogger(__name__)
     logger.info("Остановка парсинга РБК и МИР24")
     if app.rbk_mir24_task and not app.rbk_mir24_task.done():
         app.rbk_mir24_task.cancel()
