@@ -8,6 +8,7 @@ import re
 import json
 from datetime import datetime
 import shutil
+import asyncio
 
 # Настройка логирования
 os.makedirs("logs", exist_ok=True)
@@ -103,14 +104,13 @@ def combine_texts(screenshots_data):
             logger.info(f"Текст не содержит ключевых слов: '{text}'")
     return combined_texts
 
-# Обработка скриншотов для РБК и МИР24
-def process_rbk_mir24():
+async def process_rbk_mir24():
     data = {"Channel": [], "Timestamp": [], "Text": [], "Screenshot": []}
     channels = ["RBK", "MIR24"]
 
     if not os.path.exists(base_dir):
         logger.error(f"Папка {base_dir} не найдена")
-        return
+        return None, None
 
     for channel_name in channels:
         channel_dir = os.path.join(base_dir, channel_name)
@@ -131,6 +131,8 @@ def process_rbk_mir24():
                     timestamp = datetime.now()
                 text = recognize_text(image_path)
                 screenshots.append((image_path, timestamp, filename, text))
+                # Позволяем отмену задачи
+                await asyncio.sleep(0)
 
         screenshots.sort(key=lambda x: x[1])
         i = 0
@@ -159,6 +161,8 @@ def process_rbk_mir24():
                     if os.path.exists(image_path):
                         shutil.move(image_path, dest_path)
                         logger.info(f"Скриншот перемещен в {dest_path}")
+                # Позволяем отмену задачи
+                await asyncio.sleep(0)
 
             i = j
 
@@ -170,14 +174,13 @@ def process_rbk_mir24():
     logger.info(f"Результаты РБК и МИР24 сохранены в {output_file}")
     return output_file, data["Screenshot"]
 
-# Обработка остальных каналов
-def process_screenshots():
+async def process_screenshots():
     data = {"Channel": [], "Timestamp": [], "Text": [], "Screenshot": []}
     excluded_channels = ["RBK", "MIR24"]
 
     if not os.path.exists(base_dir):
         logger.error(f"Папка {base_dir} не найдена")
-        return
+        return None, None
 
     for channel_name in os.listdir(base_dir):
         if channel_name in excluded_channels:
@@ -199,6 +202,8 @@ def process_screenshots():
                     timestamp = datetime.now()
                 text = recognize_text(image_path)
                 screenshots.append((image_path, timestamp, filename, text))
+                # Позволяем отмену задачи
+                await asyncio.sleep(0)
 
         screenshots.sort(key=lambda x: x[1])
         i = 0
@@ -227,6 +232,8 @@ def process_screenshots():
                     if os.path.exists(image_path):
                         shutil.move(image_path, dest_path)
                         logger.info(f"Скриншот перемещен в {dest_path}")
+                # Позволяем отмену задачи
+                await asyncio.sleep(0)
 
             i = j
 
@@ -237,144 +244,3 @@ def process_screenshots():
     df.to_csv(output_file, index=False, encoding='utf-8-sig')
     logger.info(f"Результаты остальных каналов сохранены в {output_file}")
     return output_file, data["Screenshot"]
-
-if __name__ == "__main__":
-    process_screenshots()
-
-
-
-
-# import os
-# import cv2
-# import pytesseract
-# import pandas as pd
-# import numpy as np
-# import logging
-# import re
-# from datetime import datetime
-#
-# # Создаем папку logs, если она не существует
-# os.makedirs("logs", exist_ok=True)
-#
-# # Настройка логирования
-# logging.basicConfig(
-#     level=logging.INFO,
-#     format='%(asctime)s - %(levelname)s - %(message)s',
-#     handlers=[
-#         logging.FileHandler("logs/text_recognition_log.log"),
-#         logging.StreamHandler()
-#     ]
-# )
-# logger = logging.getLogger(__name__)
-#
-# # Путь к Tesseract
-# pytesseract.pytesseract.tesseract_cmd = r"C:\Program Files\Tesseract-OCR\tesseract.exe"
-#
-# # Папка со скриншотами
-# base_dir = "screenshots"
-#
-# # Функция для предварительной обработки изображения
-# def preprocess_image(image_path):
-#     try:
-#         # Загрузка изображения
-#         img = cv2.imread(image_path)
-#         if img is None:
-#             logger.error(f"Не удалось загрузить изображение: {image_path}")
-#             return None
-#
-#         # Преобразование в градации серого
-#         gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
-#
-#         # Увеличение контрастности
-#         gray = cv2.convertScaleAbs(gray, alpha=1.5, beta=0)
-#
-#         # Адаптивная бинаризация
-#         gray = cv2.adaptiveThreshold(
-#             gray, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C, cv2.THRESH_BINARY, 11, 2
-#         )
-#
-#         # Удаление шума
-#         gray = cv2.fastNlMeansDenoising(gray, h=10)
-#
-#         return gray
-#     except Exception as e:
-#         logger.error(f"Ошибка при обработке изображения {image_path}: {e}")
-#         return None
-#
-# # Функция для распознавания текста с изображения
-# def recognize_text(image_path):
-#     try:
-#         # Предварительная обработка
-#         processed_img = preprocess_image(image_path)
-#         if processed_img is None:
-#             return ""
-#
-#         # Настройка Tesseract
-#         custom_config = r'--oem 3 --psm 7 -l rus+eng --dpi 300'
-#
-#         # Распознавание текста
-#         text = pytesseract.image_to_string(processed_img, config=custom_config)
-#         text = text.strip()
-#
-#         # Фильтрация текста
-#         valid_text_pattern = re.compile(r'^[a-zA-Zа-яА-Я0-9,.!?\-\s]+$')
-#         meaningful_text_pattern = re.compile(r'[a-zA-Zа-яА-Я]{2,}')
-#
-#         if text and valid_text_pattern.match(text) and meaningful_text_pattern.search(text):
-#             logger.info(f"Распознан валидный текст: {text}")
-#             return text
-#         else:
-#             logger.warning(f"Текст не прошел фильтрацию: {text}")
-#             return ""
-#     except Exception as e:
-#         logger.error(f"Ошибка при распознавании текста в {image_path}: {e}")
-#         return ""
-#
-# # Функция для обработки всех скриншотов и сохранения в таблицу
-# def process_screenshots():
-#     data = {"Channel": [], "Timestamp": [], "Text": []}
-#
-#     if not os.path.exists(base_dir):
-#         logger.error(f"Папка {base_dir} не найдена")
-#         return
-#
-#     for channel_name in os.listdir(base_dir):
-#         channel_dir = os.path.join(base_dir, channel_name)
-#         if not os.path.isdir(channel_dir):
-#             continue
-#
-#         logger.info(f"Обработка канала: {channel_name}")
-#         for filename in os.listdir(channel_dir):
-#             if filename.endswith(".jpg"):
-#                 image_path = os.path.join(channel_dir, filename)
-#
-#                 # Извлечение временной метки
-#                 try:
-#                     timestamp_str = filename.replace(f"{channel_name}_", "").replace(".jpg", "")
-#                     timestamp = datetime.strptime(timestamp_str, "%Y-%m-%d_%H-%M-%S")
-#                 except ValueError as e:
-#                     logger.warning(f"Не удалось извлечь временную метку из {filename}: {e}")
-#                     timestamp = "Unknown"
-#
-#                 # Распознавание текста
-#                 text = recognize_text(image_path)
-#                 if text:
-#                     logger.info(f"Сохранен текст для {filename}: {text}")
-#                 else:
-#                     logger.warning(f"Текст не распознан для {filename}")
-#
-#                 # Добавление данных
-#                 data["Channel"].append(channel_name)
-#                 data["Timestamp"].append(timestamp)
-#                 data["Text"].append(text)
-#
-#     # Сохранение в CSV с временной меткой
-#     timestamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
-#     output_file = f"logs/recognized_text_{timestamp}.csv"
-#     df = pd.DataFrame(data)
-#     df.to_csv(output_file, index=False, encoding='utf-8-sig')
-#     logger.info(f"Результаты сохранены в {output_file}")
-#
-# # Запуск обработки
-# if __name__ == "__main__":
-#     process_screenshots()

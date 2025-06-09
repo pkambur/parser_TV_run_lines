@@ -4,30 +4,27 @@ import asyncio
 import threading
 from datetime import datetime
 
-# Установка конфигурации логгера (в файл + консоль)
 def setup_logging():
-    os.makedirs("logs", exist_ok=True)  # Создаём папку logs, если её нет
+    os.makedirs("logs", exist_ok=True)
     logging.basicConfig(
         level=logging.INFO,
         format='%(asctime)s - %(levelname)s - %(message)s',
         handlers=[
-            logging.FileHandler("logs/main_log.log"),  # Лог в файл
-            logging.StreamHandler()                   # Лог в консоль
+            logging.FileHandler("logs/main_log.log"),
+            logging.StreamHandler()
         ]
     )
-    return logging.getLogger(__name__)  # Возвращаем логгер текущего модуля
+    return logging.getLogger(__name__)
 
-# Отдельный поток для запуска asyncio-цикла
-def run_asyncio_loop(loop, parser_task):
+def run_asyncio_loop(loop):
     try:
-        loop.run_forever()  # Запускаем бесконечный цикл событий
+        loop.run_forever()
     except Exception as e:
         logging.getLogger(__name__).error(f"Ошибка в цикле asyncio: {e}")
     finally:
         loop.close()
 
-# Запуск основного мониторинга
-def start_monitoring(app, ui, run_parser_lines):
+async def start_monitoring(app, ui, run_parser_lines):
     if not app.running:
         logger = logging.getLogger(__name__)
         logger.info("Запуск мониторинга")
@@ -38,85 +35,83 @@ def start_monitoring(app, ui, run_parser_lines):
 
         app.loop = asyncio.new_event_loop()
         asyncio.set_event_loop(app.loop)
-        app.asyncio_thread = threading.Thread(
-            target=run_asyncio_loop,
-            args=(app.loop, app.parser_task),
-            daemon=True
-        )
+        app.asyncio_thread = threading.Thread(target=run_asyncio_loop, args=(app.loop,), daemon=True)
         app.asyncio_thread.start()
 
-        # Запуск задачи в новом asyncio-цикле
         app.parser_task = app.loop.create_task(run_parser_lines())
+        try:
+            await app.parser_task
+        except asyncio.CancelledError:
+            logger.info("Мониторинг остановлен")
+            ui.status_label.config(text="Состояние: Мониторинг остановлен")
+            ui.start_button.config(state="normal")
+            ui.stop_button.config(state="disabled")
+            app.running = False
 
-# Остановка мониторинга
-def stop_monitoring(app, ui):
+async def stop_monitoring(app, ui):
     if app.running:
         logger = logging.getLogger(__name__)
         logger.info("Остановка мониторинга")
-        ui.status_label.config(text="Состояние: Мониторинг остановлен")
-        ui.start_button.config(state="normal")
-        ui.stop_button.config(state="disabled")
-        app.running = False
-
         if app.parser_task:
-            app.loop.call_soon_threadsafe(app.parser_task.cancel)
+            app.parser_task.cancel()
         if app.loop:
             app.loop.call_soon_threadsafe(app.loop.stop)
 
-# Обработка строк РБК и МИР24
-def save_rbk_mir24(app, ui, process_rbk_mir24, send_files):
+async def save_rbk_mir24(app, ui, process_rbk_mir24, send_files):
     logger = logging.getLogger(__name__)
     logger.info("Сохранение строк РБК и МИР24")
     ui.status_label.config(text="Состояние: Обработка РБК и МИР24...")
     ui.rbk_mir24_button.config(state="disabled")
     ui.stop_rbk_mir24_button.config(state="normal")
     try:
-        output_file, screenshot_files = process_rbk_mir24()
-        send_files(output_file, screenshot_files)
+        app.rbk_mir24_task = app.loop.create_task(process_rbk_mir24())
+        output_file, screenshot_files = await app.rbk_mir24_task
+        if output_file and screenshot_files:
+            await send_files(output_file, screenshot_files)
         ui.status_label.config(text="Состояние: Сохранение РБК и МИР24 завершено")
         logger.info(f"Сохранение строк РБК и МИР24 завершено в {output_file}")
+    except asyncio.CancelledError:
+        logger.info("Парсинг РБК и МИР24 остановлен")
+        ui.status_label.config(text="Состояние: Парсинг РБК и МИР24 остановлен")
     except Exception as e:
         logger.error(f"Ошибка при сохранении РБК и МИР24: {e}")
         ui.status_label.config(text=f"Состояние: Ошибка: {str(e)}")
     finally:
         ui.rbk_mir24_button.config(state="normal")
         ui.stop_rbk_mir24_button.config(state="disabled")
-
-# Принудительная остановка обработки РБК/МИР24
-def stop_rbk_mir24(app, ui):
-    logger = logging.getLogger(__name__)
-    logger.info("Остановка парсинга РБК и МИР24")
-    ui.status_label.config(text="Состояние: Парсинг РБК и МИР24 остановлен")
-    ui.rbk_mir24_button.config(state="normal")
-    ui.stop_rbk_mir24_button.config(state="disabled")
-
-    # Попытка отменить задачу, если она существует и активна
-    if hasattr(app, 'rbk_mir24_task') and app.rbk_mir24_task:
-        if not app.rbk_mir24_task.done():
-            logger.info("Отмена асинхронной задачи РБК/МИР24")
-            app.loop.call_soon_threadsafe(app.rbk_mir24_task.cancel)
         app.rbk_mir24_task = None
 
-def save_to_csv(app, ui, process_screenshots, send_files):
+async def stop_rbk_mir24(app, ui):
+    logger = logging.getLogger(__name__)
+    logger.info("Остановка парсинга РБК и МИР24")
+    if app.rbk_mir24_task:
+        app.rbk_mir24_task.cancel()
+        try:
+            await app.rbk_mir24_task
+        except asyncio.CancelledError:
+            pass
+
+async def save_to_csv(app, ui, process_screenshots, send_files):
     logger = logging.getLogger(__name__)
     logger.info("Сохранение строк остальных каналов")
     ui.status_label.config(text="Состояние: Обработка остальных каналов...")
     try:
-        output_file, screenshot_files = process_screenshots()
-        send_files(output_file, screenshot_files)
+        output_file, screenshot_files = await process_screenshots()
+        if output_file and screenshot_files:
+            await send_files(output_file, screenshot_files)
         ui.status_label.config(text="Состояние: Сохранение остальных каналов завершено")
         logger.info(f"Сохранение строк остальных каналов завершено в {output_file}")
     except Exception as e:
         logger.error(f"Ошибка при сохранении остальных каналов: {e}")
         ui.status_label.config(text=f"Состояние: Ошибка: {str(e)}")
 
-async def send_strings_async(app, ui, send_to_telegram):
+async def send_strings(app, ui, send_to_telegram):
     logger = logging.getLogger(__name__)
     logger.info("Отправка строк в Telegram")
     ui.status_label.config(text="Состояние: Отправка строк...")
     ui.send_strings_button.config(state="disabled")
     try:
-        await send_to_telegram()  # Вызов асинхронной функции
+        await send_to_telegram()
         ui.status_label.config(text="Состояние: Отправка строк завершена")
         logger.info("Отправка строк в Telegram завершена")
     except Exception as e:
@@ -125,15 +120,10 @@ async def send_strings_async(app, ui, send_to_telegram):
     finally:
         ui.send_strings_button.config(state="normal")
 
-def send_strings(app, ui, send_to_telegram):
-    if app.loop and app.loop.is_running():
-        # Если цикл уже запущен, используем его
-        asyncio.run_coroutine_threadsafe(send_strings_async(app, ui, send_to_telegram), app.loop)
-    else:
-        # Создаем новый цикл для выполнения асинхронной функции
-        loop = asyncio.new_event_loop()
-        asyncio.set_event_loop(loop)
-        try:
-            loop.run_until_complete(send_strings_async(app, ui, send_to_telegram))
-        finally:
-            loop.close()
+def run_async_task(app, coro):
+    if not app.loop or not app.loop.is_running():
+        app.loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(app.loop)
+        app.asyncio_thread = threading.Thread(target=run_asyncio_loop, args=(app.loop,), daemon=True)
+        app.asyncio_thread.start()
+    asyncio.run_coroutine_threadsafe(coro, app.loop)
