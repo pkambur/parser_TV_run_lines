@@ -7,6 +7,7 @@ from UI import MonitoringUI
 from rbk_mir24_parser import process_rbk_mir24, stop_rbk_mir24
 from utils import setup_logging, run_async_task
 from parser_lines import main as start_lines_monitoring, stop_subprocesses
+from lines_to_csv import process_screenshots
 
 # Инициализация логирования
 logger = setup_logging()
@@ -30,7 +31,7 @@ class MonitoringApp:
             stop_monitoring=self.stop_lines_monitoring_task,
             save_rbk_mir24=self.start_rbk_mir24_task,
             stop_rbk_mir24=lambda: run_async_task(self, lambda: stop_rbk_mir24(self, self.ui))(),
-            save_to_csv=lambda: None,
+            save_to_csv=self.start_save_to_csv_task,
             send_strings=lambda: None,
         )
 
@@ -50,6 +51,24 @@ class MonitoringApp:
         self.thread = threading.Thread(target=start_loop, daemon=True)
         self.thread.start()
         return self.loop
+
+    def start_save_to_csv_task(self):
+        """Запускает задачу сохранения строк в CSV."""
+        self.logger.info("Попытка запуска задачи сохранения в CSV")
+        self.ui.status_label.config(text="Состояние: Сохранение строк в CSV...")
+
+        async def wrapped_task():
+            try:
+                output_file, screenshots = await process_screenshots()
+                if output_file:
+                    self.ui.status_label.config(text=f"Состояние: Сохранено в {output_file}")
+                else:
+                    self.ui.status_label.config(text="Состояние: Ошибка сохранения")
+            except Exception as e:
+                self.logger.error(f"Ошибка при сохранении в CSV: {e}")
+                self.ui.status_label.config(text="Состояние: Ошибка сохранения")
+
+        run_async_task(self, wrapped_task)()
 
     def start_lines_monitoring_task(self):
         """Запускает задачу мониторинга строк через run_async_task."""
