@@ -25,7 +25,7 @@
         "crop": "crop=1405:55:515:980"
     },
     "Izvestiya": {
-        "url": "http://hls-igi.cdnvideo.ru/igi/igi_hq/tracks-v1a1/mono.m3u8",
+        "url": "http://hls-igi.cdnvideo.ru/igi/igi_hq/tracks-v1a1/mono.ts.m3u8",
         "interval": "1/11",
         "crop": "crop=1590:50:320:1000"
     },

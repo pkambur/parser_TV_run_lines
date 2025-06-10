@@ -10,7 +10,6 @@ from datetime import datetime
 import shutil
 import asyncio
 from difflib import SequenceMatcher
-from pyspellchecker import SpellChecker
 import warnings
 warnings.filterwarnings('ignore')
 
@@ -36,13 +35,52 @@ processed_dir = "screenshots_processed"
 # Создание папки для обработанных файлов
 os.makedirs(processed_dir, exist_ok=True)
 
-# Инициализация проверки орфографии
-try:
-    spell_checker = SpellChecker(language='ru')
-    logger.info("Проверка орфографии успешно инициализирована")
-except Exception as e:
-    logger.error(f"Ошибка инициализации проверки орфографии: {e}")
-    spell_checker = None
+def is_valid_russian_text(text):
+    """Проверяет, является ли текст валидным русским текстом."""
+    if not text:
+        return False
+        
+    # Проверка на минимальную длину
+    if len(text) < 2:
+        return False
+        
+    # Проверка на наличие русских букв
+    if not re.search(r'[а-яА-Я]', text):
+        return False
+        
+    # Проверка на минимальное количество слов
+    words = text.split()
+    if len(words) < 2:
+        return False
+        
+    # Проверка на наличие слишком длинных слов (возможно, ошибка распознавания)
+    if any(len(word) > 20 for word in words):
+        return False
+        
+    # Проверка на наличие слишком много цифр
+    if len(re.findall(r'\d', text)) > len(text) * 0.3:
+        return False
+        
+    return True
+
+def clean_text(text):
+    """Очищает и нормализует текст."""
+    if not text:
+        return ""
+        
+    # Удаление специальных символов, оставляем только буквы, цифры и базовую пунктуацию
+    text = re.sub(r'[^\w\s.,!?;:()\-–—«»""\'\'№]', '', text)
+    
+    # Нормализация пробелов
+    text = re.sub(r'\s+', ' ', text)
+    
+    # Удаление одиночных символов
+    text = re.sub(r'\b[a-zA-Z0-9]\b', '', text)
+    
+    # Удаление лишних пробелов в начале и конце
+    text = text.strip()
+    
+    return text
 
 def text_similarity(text1, text2):
     """Вычисляет схожесть между двумя текстами."""
@@ -100,29 +138,6 @@ def preprocess_image(image):
         logger.error(f"Ошибка при обработке изображения: {e}")
         return None
 
-def correct_text(text):
-    """Исправление орфографических ошибок с помощью SpellChecker."""
-    if not text or not spell_checker:
-        return text
-    try:
-        words = text.split()
-        corrected_words = []
-        for word in words:
-            if spell_checker.unknown([word]):
-                correction = spell_checker.correction(word)
-                if correction:
-                    corrected_words.append(correction)
-                else:
-                    corrected_words.append(word)
-            else:
-                corrected_words.append(word)
-        corrected = ' '.join(corrected_words)
-        logger.info(f"Исправленный текст: '{corrected}'")
-        return corrected
-    except Exception as e:
-        logger.error(f"Ошибка при исправлении текста: {e}")
-        return text
-
 def recognize_text(image):
     """Распознавание текста из изображения."""
     try:
@@ -140,8 +155,8 @@ def recognize_text(image):
         texts = []
         for config in configs:
             text = pytesseract.image_to_string(processed_img, config=config)
-            text = text.strip()
-            if text:
+            text = clean_text(text)
+            if text and is_valid_russian_text(text):
                 texts.append(text)
         
         # Выбрать наиболее вероятный текст
@@ -149,28 +164,8 @@ def recognize_text(image):
             return ""
             
         text = max(texts, key=len)  # Берем самый длинный текст
-        
-        # Очистка текста
-        text = re.sub(r'[^\w\s.,!?;:()\-–—«»""\'\'№]', '', text)
-        text = re.sub(r'\s+', ' ', text)
-        text = re.sub(r'\b[a-zA-Z0-9]\b', '', text)
-        
-        if re.match(r'^[\d\s\W]+$', text):
-            return ""
-            
-        # Исправление орфографии
-        text = correct_text(text)
-        
         logger.info(f"Распознанный текст: '{text}'")
         
-        if len(text) < 2:
-            logger.warning("Текст слишком короткий")
-            return ""
-            
-        if not re.search(r'[а-яА-Я]', text):
-            logger.warning("Текст не содержит русских букв")
-            return ""
-            
         return text
     except Exception as e:
         logger.error(f"Ошибка при распознавании текста: {e}")
