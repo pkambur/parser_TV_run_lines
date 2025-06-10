@@ -6,6 +6,7 @@ import tkinter as tk
 from UI import MonitoringUI
 from rbk_mir24_parser import process_rbk_mir24, stop_rbk_mir24
 from utils import setup_logging, run_async_task
+from parser_lines import main as start_lines_monitoring, stop_subprocesses
 
 # Инициализация логирования
 logger = setup_logging()
@@ -19,11 +20,14 @@ class MonitoringApp:
 
         self.rbk_mir24_task = None
         self.rbk_mir24_running = False
+        
+        self.lines_monitoring_task = None
+        self.lines_monitoring_running = False
 
         # UI с привязкой обработчиков
         self.ui = MonitoringUI(
-            start_monitoring=lambda: None,  # пока не реализовано
-            stop_monitoring=lambda: None,
+            start_monitoring=self.start_lines_monitoring_task,
+            stop_monitoring=self.stop_lines_monitoring_task,
             save_rbk_mir24=self.start_rbk_mir24_task,
             stop_rbk_mir24=lambda: run_async_task(self, lambda: stop_rbk_mir24(self, self.ui))(),
             save_to_csv=lambda: None,
@@ -46,6 +50,60 @@ class MonitoringApp:
         self.thread = threading.Thread(target=start_loop, daemon=True)
         self.thread.start()
         return self.loop
+
+    def start_lines_monitoring_task(self):
+        """Запускает задачу мониторинга строк через run_async_task."""
+        self.logger.info("Попытка запуска задачи мониторинга строк")
+
+        if self.lines_monitoring_running:
+            self.logger.warning("Задача мониторинга строк уже выполняется")
+            self.ui.status_label.config(text="Состояние: Предыдущий мониторинг еще выполняется")
+            return
+
+        self.lines_monitoring_running = True
+        self.ui.start_button.config(state="disabled")
+        self.ui.stop_button.config(state="normal")
+
+        async def wrapped_task():
+            try:
+                self.lines_monitoring_task = asyncio.create_task(start_lines_monitoring())
+                await self.lines_monitoring_task
+            except asyncio.CancelledError:
+                self.logger.info("Задача мониторинга строк была отменена")
+            finally:
+                self.lines_monitoring_running = False
+                self.lines_monitoring_task = None
+                self.ui.start_button.config(state="normal")
+                self.ui.stop_button.config(state="disabled")
+                self.logger.info("Флаг lines_monitoring_running сброшен после завершения задачи")
+
+        run_async_task(self, wrapped_task)()
+
+    def stop_lines_monitoring_task(self):
+        """Останавливает задачу мониторинга строк."""
+        self.logger.info("Попытка остановки задачи мониторинга строк")
+        
+        if not self.lines_monitoring_running:
+            self.logger.warning("Задача мониторинга строк не выполняется")
+            return
+
+        async def wrapped_task():
+            try:
+                if self.lines_monitoring_task:
+                    self.lines_monitoring_task.cancel()
+                    try:
+                        await self.lines_monitoring_task
+                    except asyncio.CancelledError:
+                        pass
+                await stop_subprocesses()
+            finally:
+                self.lines_monitoring_running = False
+                self.lines_monitoring_task = None
+                self.ui.start_button.config(state="normal")
+                self.ui.stop_button.config(state="disabled")
+                self.logger.info("Мониторинг строк остановлен")
+
+        run_async_task(self, wrapped_task)()
 
     def start_rbk_mir24_task(self):
         """Запускает задачу обработки РБК и МИР24 через run_async_task."""
