@@ -89,17 +89,20 @@ def send_strings(app, ui, callback):
     return process()
 
 
-def run_async_task(app, coro):
+def run_async_task(app, coro_or_func):
     """Запуск асинхронной задачи в цикле событий без блокировки UI."""
     def wrapper():
         loop = app.ensure_loop()
         try:
+            coro = coro_or_func() if callable(coro_or_func) else coro_or_func
             logger.info(f"Запуск асинхронной задачи: {getattr(coro, '__name__', str(coro))}")
-            task = loop.create_task(coro)
+            asyncio.run_coroutine_threadsafe(coro, loop)  # ✅ запускает задачу немедленно
         except Exception as e:
-            logger.error(f"Ошибка при запуске задачи {getattr(coro, '__name__', str(coro))}: {e}")
+            logger.error(f"Ошибка при запуске задачи {getattr(coro_or_func, '__name__', str(coro_or_func))}: {e}")
             app.ui.status_label.config(text=f"Состояние: Ошибка: {str(e)}")
     return wrapper
+
+
 
 
 def start_runnable(func):
