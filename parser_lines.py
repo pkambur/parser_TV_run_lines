@@ -1,23 +1,28 @@
-import asyncio
-import json
 import os
+import time
+import json
 import logging
+import threading
 from datetime import datetime
+import subprocess
+from utils import setup_logging
 
-# Настройка логирования
-logging.basicConfig(
-    level=logging.INFO,
-    format='%(asctime)s - %(levelname)s - %(name)s - %(message)s',
-    handlers=[
-        logging.FileHandler("logs/parser_lines_log.log"),
-        logging.StreamHandler()
-    ]
-)
-logger = logging.getLogger(__name__)
+# Инициализация логирования
+logger = setup_logging()
 
-# Глобальный список для хранения подпроцессов
-subprocesses = []
+# Глобальные переменные для управления мониторингом
+monitoring_threads = []
+force_capture = False
+stop_monitoring = False
 
+def load_channels():
+    """Загрузка конфигурации каналов из JSON файла."""
+    try:
+        with open('channels.json', 'r', encoding='utf-8') as f:
+            return json.load(f)
+    except Exception as e:
+        logger.error(f"Ошибка при загрузке конфигурации каналов: {e}")
+        return {}
 
 def parse_interval(interval_str):
     """Парсит строку интервала (например, '1/7') и возвращает количество секунд."""
@@ -34,136 +39,184 @@ def parse_interval(interval_str):
         logger.error(f"Ошибка парсинга интервала {interval_str}: {e}. Используется 10 секунд.")
         return 10
 
-
-async def run_ffmpeg(channel_name, channel_info):
-    """Запускает FFmpeg для создания скриншота с указанного URL."""
+def capture_screenshot(channel_name, stream_url, output_dir, crop_params=None):
+    """Создание скриншота из видеопотока."""
     try:
-        output_dir = os.path.join("screenshots", channel_name)
-        os.makedirs(output_dir, exist_ok=True)
-
-        timestamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
-        output_path = os.path.join(output_dir, f"{channel_name}_{timestamp}.jpg")
-
-        # Базовая команда FFmpeg
-        cmd = [
-            "ffmpeg",
-            "-i", channel_info["url"],
-            "-vframes", "1",
-            "-q:v", "2"
+        # Формируем имя файла с текущей датой и временем
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        output_file = os.path.join(output_dir, f"{channel_name}_{timestamp}.jpg")
+        
+        # Базовые параметры ffmpeg
+        ffmpeg_cmd = [
+            'ffmpeg',
+            '-y',  # Перезаписывать файл если существует
+            '-i', stream_url,
+            '-vframes', '1',  # Захватить только один кадр
+            '-q:v', '2'  # Качество JPEG (2 - лучшее)
         ]
-
-        # Добавляем обрезку, если указано
-        if "crop" in channel_info:
-            cmd.extend(["-vf", channel_info["crop"]])
-
-        cmd.append(output_path)
-
-        logger.info(f"Запуск команды для {channel_name}: {' '.join(cmd)}")
-        process = await asyncio.create_subprocess_exec(
-            *cmd,
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.PIPE
+        
+        # Добавляем параметры обрезки если они указаны
+        if crop_params:
+            try:
+                ffmpeg_cmd.extend(['-vf', crop_params])
+            except Exception as e:
+                logger.error(f"Ошибка при формировании параметров обрезки для {channel_name}: {e}")
+        
+        # Добавляем выходной файл
+        ffmpeg_cmd.append(output_file)
+        
+        # Запускаем ffmpeg
+        process = subprocess.Popen(
+            ffmpeg_cmd,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE
         )
-        subprocesses.append(process)  # Сохраняем подпроцесс
-
-        stdout, stderr = await process.communicate()
-        if process.returncode != 0:
-            logger.error(f"Ошибка ffmpeg для {channel_name}: {stderr.decode()}")
+        
+        # Ждем завершения процесса
+        stdout, stderr = process.communicate(timeout=30)
+        
+        if process.returncode == 0:
+            logger.info(f"Скриншот создан: {output_file}")
+            return True
         else:
-            logger.info(f"Скриншот сохранен: {output_path}")
+            logger.error(f"Ошибка при создании скриншота: {stderr.decode()}")
+            return False
+            
+    except subprocess.TimeoutExpired:
+        process.kill()
+        logger.error(f"Таймаут при создании скриншота для {channel_name}")
+        return False
     except Exception as e:
         logger.error(f"Ошибка при создании скриншота для {channel_name}: {e}")
+        return False
 
-
-async def process_channel(channel):
-    """Запускает цикл создания скриншотов для одного канала с заданным интервалом."""
-    channel_name = channel["name"]
-    interval = parse_interval(channel.get("interval", "1/10"))
-    logger.info(f"Запуск обработки канала {channel_name} с интервалом {interval} секунд")
-
+def monitor_channel(channel_name, channel_info):
+    """Мониторинг отдельного канала."""
+    global force_capture, stop_monitoring
     try:
-        while True:
-            await run_ffmpeg(channel_name, channel)
-            await asyncio.sleep(interval)
-    except asyncio.CancelledError:
-        logger.info(f"Обработка канала {channel_name} остановлена")
-        raise
+        # Получаем URL потока из конфигурации
+        stream_url = channel_info.get('url')
+        if not stream_url:
+            logger.error(f"Не указан URL потока для канала {channel_name}")
+            return
 
-
-async def stop_subprocesses():
-    """Завершает все подпроцессы FFmpeg."""
-    logger.info("Завершение всех подпроцессов FFmpeg")
-    try:
-        for process in subprocesses:
-            if process.returncode is None:  # Проверяем, что процесс активен
-                try:
-                    logger.info(f"Завершение процесса: {process.pid}")
-                    process.terminate()  # Мягкое завершение
-                    await asyncio.sleep(1)
-                    if process.returncode is None:
-                        logger.warning(f"Процесс {process.pid} не завершился, принудительное завершение")
-                        process.kill()  # Принудительное завершение
-                except Exception as e:
-                    logger.error(f"Ошибка при завершении процесса {process.pid}: {e}")
-        subprocesses.clear()  # Очищаем список
-    except Exception as e:
-        logger.error(f"Ошибка при завершении подпроцессов: {e}")
-
-
-async def main():
-    """Основная функция для запуска парсинга всех каналов."""
-    try:
-        if not os.path.exists("channels.json"):
-            logger.error("Файл channels.json не найден")
-            raise FileNotFoundError("Файл channels.json не найден")
-
-        with open("channels.json", "r", encoding="utf-8") as f:
+        # Создаем директорию для скриншотов если её нет
+        output_dir = os.path.join('screenshots', channel_name)
+        os.makedirs(output_dir, exist_ok=True)
+        
+        # Получаем параметры обрезки и интервал
+        crop_params = channel_info.get('crop')
+        interval = parse_interval(channel_info.get('interval', '1/10'))
+        
+        logger.info(f"Запущен мониторинг канала {channel_name} (URL: {stream_url}, интервал: {interval} сек)")
+        
+        last_capture_time = None
+        
+        while not stop_monitoring:
             try:
-                channels_data = json.load(f)
-                if not isinstance(channels_data, dict):
-                    logger.error("channels.json должен содержать словарь с каналами")
-                    raise ValueError("Неверный формат channels.json")
-            except json.JSONDecodeError as e:
-                logger.error(f"Ошибка формата JSON в channels.json: {e}")
-                raise
-
-        # Преобразуем словарь в список каналов
-        channels = [
-            {"name": name, "url": info["url"], "interval": info.get("interval"), "crop": info.get("crop")}
-            for name, info in channels_data.items()
-        ]
-
-        if not channels:
-            logger.error("В channels.json отсутствуют каналы")
-            raise ValueError("Список каналов пуст")
-
-        logger.info(f"Загружены каналы: {channels}")
-
-        # Создаем отдельную задачу для каждого канала
-        tasks = [asyncio.create_task(process_channel(channel)) for channel in channels]
-
-        try:
-            await asyncio.gather(*tasks, return_exceptions=True)
-        except asyncio.CancelledError:
-            logger.info("Парсинг строк остановлен")
-            for task in tasks:
-                task.cancel()
-                try:
-                    await task
-                except asyncio.CancelledError:
-                    pass
-            await stop_subprocesses()
-            raise
-
-    except asyncio.CancelledError:
-        logger.info("Парсинг строк остановлен")
-        await stop_subprocesses()
-        raise
+                current_time = time.time()
+                
+                # Проверяем флаг принудительного захвата или прошло достаточно времени
+                if force_capture or (last_capture_time is None or current_time - last_capture_time >= interval):
+                    # Создаем скриншот
+                    result = capture_screenshot(channel_name, stream_url, output_dir, crop_params)
+                    if result:
+                        logger.info(f"Скриншот успешно создан для {channel_name}")
+                        last_capture_time = current_time
+                    else:
+                        logger.error(f"Не удалось создать скриншот для {channel_name}")
+                    
+                    # Сбрасываем флаг принудительного захвата
+                    if force_capture:
+                        force_capture = False
+                
+                # Проверяем флаг остановки каждую секунду
+                time.sleep(1)
+                
+            except Exception as e:
+                logger.error(f"Ошибка в цикле мониторинга канала {channel_name}: {e}")
+                if stop_monitoring:
+                    break
+                time.sleep(5)  # Пауза перед повторной попыткой
+                
     except Exception as e:
-        logger.error(f"Ошибка в парсинге строк: {e}")
-        await stop_subprocesses()
-        raise
+        logger.error(f"Критическая ошибка при мониторинге канала {channel_name}: {e}")
+    finally:
+        logger.info(f"Мониторинг канала {channel_name} завершен")
 
+def start_force_capture():
+    """Запускает принудительный захват скриншотов для всех каналов."""
+    global force_capture
+    force_capture = True
+    logger.info("Запущен принудительный захват скриншотов")
+
+def stop_force_capture():
+    """Останавливает принудительный захват скриншотов."""
+    global force_capture
+    force_capture = False
+    logger.info("Остановлен принудительный захват скриншотов")
+
+def stop_subprocesses():
+    """Останавливает все потоки мониторинга."""
+    global stop_monitoring
+    stop_monitoring = True
+    logger.info("Остановка всех потоков мониторинга")
+    
+    # Ждем завершения всех потоков
+    for thread in monitoring_threads:
+        if thread.is_alive():
+            try:
+                thread.join(timeout=5.0)
+            except Exception as e:
+                logger.error(f"Ошибка при остановке потока {thread.name}: {e}")
+    
+    # Очищаем список потоков
+    monitoring_threads.clear()
+    
+    # Сбрасываем флаг остановки
+    stop_monitoring = False
+    logger.info("Все потоки мониторинга остановлены")
+
+def main():
+    """Основная функция мониторинга."""
+    try:
+        # Загружаем конфигурацию каналов
+        channels = load_channels()
+        if not channels:
+            logger.error("Не удалось загрузить конфигурацию каналов")
+            return
+
+        # Запускаем мониторинг для каждого канала
+        for channel_name, channel_info in channels.items():
+            # Проверяем наличие URL
+            if not channel_info.get('url'):
+                logger.error(f"Пропуск канала {channel_name}: не указан URL потока")
+                continue
+                
+            # Создаем и запускаем поток для канала
+            thread = threading.Thread(
+                target=monitor_channel,
+                args=(channel_name, channel_info),
+                name=f"monitor_{channel_name}"
+            )
+            thread.daemon = True
+            thread.start()
+            monitoring_threads.append(thread)
+            logger.info(f"Запущен мониторинг канала {channel_name}")
+
+        # Ждем завершения всех потоков
+        for thread in monitoring_threads:
+            thread.join()
+
+    except KeyboardInterrupt:
+        logger.info("Получен сигнал завершения работы")
+        stop_subprocesses()
+    except Exception as e:
+        logger.error(f"Ошибка в основном процессе: {e}")
+        stop_subprocesses()
+
+# Экспортируем необходимые функции
+__all__ = ['main', 'stop_subprocesses', 'start_force_capture', 'stop_force_capture']
 
 if __name__ == "__main__":
-    asyncio.run(main())
+    main()

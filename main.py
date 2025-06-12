@@ -2,11 +2,12 @@ import logging
 import threading
 import asyncio
 import tkinter as tk
+from tkinter import ttk, messagebox
 
 from UI import MonitoringUI
 from rbk_mir24_parser import process_rbk_mir24, stop_rbk_mir24
 from utils import setup_logging, run_async_task
-from parser_lines import main as start_lines_monitoring, stop_subprocesses
+from parser_lines import main as start_lines_monitoring, stop_subprocesses, start_force_capture, stop_force_capture
 from lines_to_csv import process_screenshots
 
 # Инициализация логирования
@@ -22,131 +23,154 @@ class MonitoringApp:
         self.rbk_mir24_task = None
         self.rbk_mir24_running = False
         
-        self.lines_monitoring_task = None
+        self.lines_monitoring_thread = None
         self.lines_monitoring_running = False
 
-        # UI с привязкой обработчиков
-        self.ui = MonitoringUI(
-            start_monitoring=self.start_lines_monitoring_task,
-            stop_monitoring=self.stop_lines_monitoring_task,
-            save_rbk_mir24=self.start_rbk_mir24_task,
-            stop_rbk_mir24=lambda: run_async_task(self, lambda: stop_rbk_mir24(self, self.ui))(),
-            save_to_csv=self.start_save_to_csv_task,
-            send_strings=lambda: None,
-        )
+        # Создаем и запускаем UI
+        self.ui = MonitoringUI(self)
+        self.ui.run()
 
-    def ensure_loop(self):
-        if self.loop and self.loop.is_running():
-            self.logger.info("Использование существующего цикла событий")
-            return self.loop
+    def start_rbk_mir24(self):
+        """Запуск мониторинга RBK и MIR24."""
+        if not self.rbk_mir24_running:
+            self.rbk_mir24_running = True
+            self.rbk_mir24_task = asyncio.run_coroutine_threadsafe(
+                process_rbk_mir24(),
+                self.loop
+            )
+            self.ui.update_rbk_mir24_status("Запущен")
+            logger.info("Запущен мониторинг RBK и MIR24")
+        else:
+            messagebox.showwarning("Предупреждение", "Мониторинг RBK и MIR24 уже запущен")
 
-        self.logger.info("Создание нового цикла событий")
-        self.loop = asyncio.new_event_loop()
-
-        def start_loop():
-            asyncio.set_event_loop(self.loop)
-            self.logger.info("Запуск нового потока для цикла событий")
-            self.loop.run_forever()
-
-        self.thread = threading.Thread(target=start_loop, daemon=True)
-        self.thread.start()
-        return self.loop
-
-    def start_save_to_csv_task(self):
-        """Запускает задачу сохранения строк в CSV."""
-        self.logger.info("Попытка запуска задачи сохранения в CSV")
-        self.ui.status_label.config(text="Состояние: Сохранение строк в CSV...")
-
-        async def wrapped_task():
-            try:
-                output_file, screenshots = await process_screenshots()
-                if output_file:
-                    self.ui.status_label.config(text=f"Состояние: Сохранено в {output_file}")
-                else:
-                    self.ui.status_label.config(text="Состояние: Ошибка сохранения")
-            except Exception as e:
-                self.logger.error(f"Ошибка при сохранении в CSV: {e}")
-                self.ui.status_label.config(text="Состояние: Ошибка сохранения")
-
-        run_async_task(self, wrapped_task)()
-
-    def start_lines_monitoring_task(self):
-        """Запускает задачу мониторинга строк через run_async_task."""
-        self.logger.info("Попытка запуска задачи мониторинга строк")
-
-        if self.lines_monitoring_running:
-            self.logger.warning("Задача мониторинга строк уже выполняется")
-            self.ui.status_label.config(text="Состояние: Предыдущий мониторинг еще выполняется")
-            return
-
-        self.lines_monitoring_running = True
-        self.ui.start_button.config(state="disabled")
-        self.ui.stop_button.config(state="normal")
-
-        async def wrapped_task():
-            try:
-                self.lines_monitoring_task = asyncio.create_task(start_lines_monitoring())
-                await self.lines_monitoring_task
-            except asyncio.CancelledError:
-                self.logger.info("Задача мониторинга строк была отменена")
-            finally:
-                self.lines_monitoring_running = False
-                self.lines_monitoring_task = None
-                self.ui.start_button.config(state="normal")
-                self.ui.stop_button.config(state="disabled")
-                self.logger.info("Флаг lines_monitoring_running сброшен после завершения задачи")
-
-        run_async_task(self, wrapped_task)()
-
-    def stop_lines_monitoring_task(self):
-        """Останавливает задачу мониторинга строк."""
-        self.logger.info("Попытка остановки задачи мониторинга строк")
-        
-        if not self.lines_monitoring_running:
-            self.logger.warning("Задача мониторинга строк не выполняется")
-            return
-
-        async def wrapped_task():
-            try:
-                if self.lines_monitoring_task:
-                    self.lines_monitoring_task.cancel()
-                    try:
-                        await self.lines_monitoring_task
-                    except asyncio.CancelledError:
-                        pass
-                await stop_subprocesses()
-            finally:
-                self.lines_monitoring_running = False
-                self.lines_monitoring_task = None
-                self.ui.start_button.config(state="normal")
-                self.ui.stop_button.config(state="disabled")
-                self.logger.info("Мониторинг строк остановлен")
-
-        run_async_task(self, wrapped_task)()
-
-    def start_rbk_mir24_task(self):
-        """Запускает задачу обработки РБК и МИР24 через run_async_task."""
-        self.logger.info("Попытка запуска задачи РБК и МИР24")
-
+    def stop_rbk_mir24(self):
+        """Остановка мониторинга RBK и MIR24."""
         if self.rbk_mir24_running:
-            self.logger.warning("Задача РБК и МИР24 уже выполняется")
-            self.ui.status_label.config(text="Состояние: Предыдущая запись еще выполняется")
-            return
+            self.rbk_mir24_running = False
+            asyncio.run_coroutine_threadsafe(
+                stop_rbk_mir24(),
+                self.loop
+            )
+            self.ui.update_rbk_mir24_status("Остановлен")
+            logger.info("Остановлен мониторинг RBK и MIR24")
+        else:
+            messagebox.showwarning("Предупреждение", "Мониторинг RBK и MIR24 уже остановлен")
 
-        self.rbk_mir24_running = True
+    def start_lines_monitoring(self):
+        """Запуск мониторинга строк."""
+        if not self.lines_monitoring_running:
+            self.lines_monitoring_running = True
+            # Запускаем принудительный захват скриншотов
+            start_force_capture()
+            # Запускаем поток мониторинга
+            self.lines_monitoring_thread = threading.Thread(
+                target=start_lines_monitoring,
+                daemon=True
+            )
+            self.lines_monitoring_thread.start()
+            self.ui.update_lines_status("Запущен")
+            logger.info("Запущен мониторинг строк")
+        else:
+            messagebox.showwarning("Предупреждение", "Мониторинг строк уже запущен")
 
-        async def wrapped_task():
-            try:
-                await process_rbk_mir24(self, self.ui, send_files=None)
-            finally:
-                self.rbk_mir24_running = False
-                self.logger.info("Флаг rbk_mir24_running сброшен после завершения задачи")
+    def stop_lines_monitoring(self):
+        """Остановка мониторинга строк."""
+        if self.lines_monitoring_running:
+            self.lines_monitoring_running = False
+            # Останавливаем принудительный захват
+            stop_force_capture()
+            # Останавливаем все процессы
+            stop_subprocesses()
+            # Ждем завершения потока мониторинга
+            if self.lines_monitoring_thread and self.lines_monitoring_thread.is_alive():
+                self.lines_monitoring_thread.join(timeout=5.0)
+            self.lines_monitoring_thread = None
+            self.ui.update_lines_status("Остановлен")
+            logger.info("Остановлен мониторинг строк")
+        else:
+            messagebox.showwarning("Предупреждение", "Мониторинг строк уже остановлен")
 
-        run_async_task(self, wrapped_task)()
+    def start_save_to_csv(self):
+        """Запуск сохранения строк в CSV."""
+        try:
+            self.ui.update_status("Сохранение строк в CSV...")
+            # Запускаем процесс сохранения в отдельном потоке
+            thread = threading.Thread(
+                target=self._save_to_csv_task,
+                daemon=True
+            )
+            thread.start()
+        except Exception as e:
+            logger.error(f"Ошибка при запуске сохранения в CSV: {e}")
+            self.ui.update_status("Ошибка при сохранении в CSV")
+            messagebox.showerror("Ошибка", f"Не удалось сохранить строки в CSV: {e}")
+
+    def _save_to_csv_task(self):
+        """Задача сохранения строк в CSV."""
+        try:
+            output_file, screenshots = process_screenshots()
+            if output_file:
+                self.ui.update_status(f"Сохранено в {output_file}")
+                messagebox.showinfo("Успех", f"Строки сохранены в файл: {output_file}")
+            else:
+                self.ui.update_status("Ошибка сохранения")
+                messagebox.showerror("Ошибка", "Не удалось сохранить строки в CSV")
+        except Exception as e:
+            logger.error(f"Ошибка при сохранении в CSV: {e}")
+            self.ui.update_status("Ошибка при сохранении в CSV")
+            messagebox.showerror("Ошибка", f"Не удалось сохранить строки в CSV: {e}")
 
     def run(self):
-        self.ui.run()
+        """Запуск приложения."""
+        try:
+            # Создаем новый event loop
+            self.loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(self.loop)
+            
+            # Запускаем event loop в отдельном потоке
+            self.thread = threading.Thread(
+                target=self.loop.run_forever,
+                daemon=True
+            )
+            self.thread.start()
+            
+            # Запускаем UI
+            self.ui.run()
+            
+        except Exception as e:
+            logger.error(f"Ошибка при запуске приложения: {e}")
+            if self.loop:
+                self.loop.stop()
+            if self.thread:
+                self.thread.join()
+
+    def cleanup(self):
+        """Очистка ресурсов при закрытии приложения."""
+        try:
+            # Останавливаем мониторинг RBK и MIR24
+            if self.rbk_mir24_running:
+                self.stop_rbk_mir24()
+            
+            # Останавливаем мониторинг строк
+            if self.lines_monitoring_running:
+                self.stop_lines_monitoring()
+            
+            # Останавливаем event loop
+            if self.loop:
+                self.loop.stop()
+            
+            # Ждем завершения потока
+            if self.thread:
+                self.thread.join()
+                
+        except Exception as e:
+            logger.error(f"Ошибка при очистке ресурсов: {e}")
 
 if __name__ == "__main__":
     app = MonitoringApp()
-    app.run()
+    try:
+        app.run()
+    except KeyboardInterrupt:
+        logger.info("Получен сигнал завершения работы")
+    finally:
+        app.cleanup()
