@@ -14,8 +14,29 @@ import json
 from huggingface_hub import HfApi, InferenceClient
 import hashlib
 from collections import defaultdict
+import shutil
 
 logger = logging.getLogger(__name__)
+
+# Загрузка ключевых слов
+def load_keywords():
+    try:
+        with open('keywords.json', 'r', encoding='utf-8') as f:
+            data = json.load(f)
+            return set(word.lower() for word in data['keywords'])
+    except Exception as e:
+        logger.error(f"Ошибка при загрузке ключевых слов: {e}")
+        return set()
+
+# Инициализация ключевых слов
+KEYWORDS = load_keywords()
+
+# Создание директории для обработанных файлов
+def ensure_processed_dir():
+    processed_dir = "screenshots_processed"
+    if not os.path.exists(processed_dir):
+        os.makedirs(processed_dir)
+    return processed_dir
 
 # Инициализация Hugging Face API
 HF_API_TOKEN = os.getenv("HUGGINGFACE_HUB_TOKEN")
@@ -96,11 +117,15 @@ async def is_readable_text(text, image_path):
 
     # Используем Qwen2.5-VL через Inference API
     try:
-        # Формируем промпт для исправления текста
+        # Формируем промпт для проверки читаемости текста
         prompt = (
-            f"Исправь следующий текст, распознанный с изображения, на русский или английский язык, "
-            f"сохраняя его смысл. Если текст бессмысленный или содержит слишком много ошибок, "
-            f"укажи, что он нечитаемый. Текст: '{text}'"
+            f"Проанализируй следующий текст, распознанный с изображения. "
+            f"Определи, является ли он читаемым и осмысленным текстом на русском или английском языке. "
+            f"Учитывай, что это бегущая строка новостей. "
+            f"Если текст содержит бессмысленные символы, случайные буквы или нечитаемые последовательности, "
+            f"укажи, что он нечитаемый. "
+            f"Ответь только 'читаемый' или 'нечитаемый' и кратко объясни причину. "
+            f"Текст: '{text}'"
         )
 
         # Конвертируем изображение в base64
@@ -129,7 +154,11 @@ async def is_readable_text(text, image_path):
             }
             payload = {
                 "inputs": messages,
-                "parameters": {"max_new_tokens": 512}
+                "parameters": {
+                    "max_new_tokens": 512,
+                    "temperature": 0.3,  # Уменьшаем температуру для более консистентных ответов
+                    "top_p": 0.9
+                }
             }
             
             try:
@@ -148,26 +177,53 @@ async def is_readable_text(text, image_path):
                         
                     result = await response.json()
                     if isinstance(result, list) and result:
-                        corrected_text = result[0].get("generated_text", text)
+                        response_text = result[0].get("generated_text", "").lower()
+                        logger.debug(f"Ответ Qwen2.5-VL: {response_text}")
+                        
+                        # Проверяем ответ модели
+                        if "нечитаемый" in response_text:
+                            logger.debug(f"Qwen2.5-VL определил текст как нечитаемый: {text}")
+                            return False, text
+                        elif "читаемый" in response_text:
+                            # Если текст читаемый, пробуем его исправить
+                            correction_prompt = (
+                                f"Исправь следующий текст, сохраняя его смысл. "
+                                f"Исправь опечатки и форматирование, но сохрани все числа и специальные символы. "
+                                f"Текст: '{text}'"
+                            )
+                            
+                            correction_messages = [
+                                {
+                                    "role": "user",
+                                    "content": [
+                                        {"type": "text", "text": correction_prompt},
+                                        {"type": "image_url", "image_url": f"data:image/jpeg;base64,{image_base64}"}
+                                    ]
+                                }
+                            ]
+                            
+                            payload["inputs"] = correction_messages
+                            
+                            async with session.post(
+                                "https://api-inference.huggingface.co/models/Qwen/Qwen2-VL-7B-Instruct",
+                                headers=headers,
+                                json=payload,
+                                timeout=30
+                            ) as correction_response:
+                                if correction_response.status == 200:
+                                    correction_result = await correction_response.json()
+                                    if isinstance(correction_result, list) and correction_result:
+                                        corrected_text = correction_result[0].get("generated_text", text)
+                                        return True, corrected_text.strip()
+                            
+                            return True, text
+                        else:
+                            logger.warning(f"Неожиданный ответ от Qwen2.5-VL: {response_text}")
+                            return len(words) >= 2 and len(clean_text.strip()) >= 5, text
                     else:
                         logger.error(f"Некорректный ответ API: {result}")
                         return len(words) >= 2 and len(clean_text.strip()) >= 5, text
-
-                logger.debug(f"Qwen2.5-VL исправленный текст: {corrected_text}")
-                
-                # Проверяем, указала ли модель, что текст нечитаемый
-                if "нечитаемый" in corrected_text.lower() or "бессмысленный" in corrected_text.lower():
-                    logger.debug(f"Qwen2.5-VL определил текст как нечитаемый: {text}")
-                    return False, text
-                
-                # Проверяем исправленный текст на минимальные требования
-                clean_corrected = re.sub(r'[^а-яА-Яa-zA-Z\s]', '', corrected_text)
-                if len(clean_corrected.strip()) < 5 or len(clean_corrected.strip().split()) < 2:
-                    logger.debug(f"Исправленный текст не соответствует требованиям: {corrected_text}")
-                    return False, text
                     
-                return True, corrected_text
-                
             except asyncio.TimeoutError:
                 logger.error("Таймаут при обращении к API")
                 return len(words) >= 2 and len(clean_text.strip()) >= 5, text
@@ -204,7 +260,7 @@ class TextDuplicateChecker:
         return False
 
 async def process_file(file_path, channel_name, duplicate_checker):
-    """Обработка одного файла (скриншота) с проверкой на дубликаты."""
+    """Обработка одного файла (скриншота) с проверкой на дубликаты и ключевые слова."""
     try:
         # Извлекаем timestamp из имени файла
         file_name = os.path.basename(file_path)
@@ -248,6 +304,23 @@ async def process_file(file_path, channel_name, duplicate_checker):
             logger.info(f"Обнаружен дубликат текста в файле {file_path}: {corrected_text[:50]}...")
             os.remove(file_path)
             logger.info(f"Удален файл с дубликатом текста: {file_path}")
+            return None
+
+        # Проверяем наличие ключевых слов
+        text_words = set(re.findall(r'\b\w+\b', corrected_text.lower()))
+        has_keywords = bool(text_words & KEYWORDS)
+
+        if has_keywords:
+            # Перемещаем файл в папку screenshots_processed
+            processed_dir = ensure_processed_dir()
+            new_path = os.path.join(processed_dir, file_name)
+            shutil.move(file_path, new_path)
+            logger.info(f"Файл перемещен в {new_path} (найдены ключевые слова)")
+            file_path = new_path
+        else:
+            # Удаляем файл, если нет ключевых слов
+            os.remove(file_path)
+            logger.info(f"Удален файл без ключевых слов: {file_path}")
             return None
             
         return {
