@@ -1,5 +1,8 @@
 import tkinter as tk
 from tkinter import ttk, messagebox
+import logging
+
+logger = logging.getLogger(__name__)
 
 class MonitoringUI:
     def __init__(self, app):
@@ -8,11 +11,9 @@ class MonitoringUI:
         self.root.title("Мониторинг телеканалов")
         self.root.geometry("400x300")
         
-        # Создаем и размещаем элементы интерфейса
         self.create_widgets()
         
     def create_widgets(self):
-        # Фрейм для кнопок мониторинга строк
         lines_frame = ttk.LabelFrame(self.root, text="Мониторинг строк", padding=10)
         lines_frame.pack(fill="x", padx=10, pady=5)
         
@@ -37,7 +38,6 @@ class MonitoringUI:
         )
         self.stop_lines_button.pack(side="left", padx=5)
         
-        # Фрейм для кнопок RBK и MIR24
         rbk_mir24_frame = ttk.LabelFrame(self.root, text="RBK и MIR24", padding=10)
         rbk_mir24_frame.pack(fill="x", padx=10, pady=5)
         
@@ -62,7 +62,6 @@ class MonitoringUI:
         )
         self.stop_rbk_mir24_button.pack(side="left", padx=5)
         
-        # Кнопка сохранения в CSV
         self.save_csv_button = ttk.Button(
             self.root,
             text="Сохранить строки в CSV",
@@ -70,12 +69,10 @@ class MonitoringUI:
         )
         self.save_csv_button.pack(pady=10)
         
-        # Статусная строка
         self.status_label = ttk.Label(self.root, text="Готов к работе")
         self.status_label.pack(side="bottom", fill="x", padx=10, pady=5)
         
     def update_lines_status(self, status):
-        """Обновляет статус мониторинга строк."""
         self.lines_status.config(text=f"Состояние: {status}")
         if status == "Запущен":
             self.start_lines_button.config(state="disabled")
@@ -85,23 +82,28 @@ class MonitoringUI:
             self.stop_lines_button.config(state="disabled")
             
     def update_rbk_mir24_status(self, status):
-        """Обновляет статус мониторинга RBK и MIR24."""
         self.rbk_mir24_status.config(text=f"Состояние: {status}")
         if status == "Запущен":
             self.start_rbk_mir24_button.config(state="disabled")
             self.stop_rbk_mir24_button.config(state="normal")
-        else:
+            self.status_label.config(text="Запись RBK и MIR24 запущена")
+        elif status == "Остановлен":
             self.start_rbk_mir24_button.config(state="normal")
             self.stop_rbk_mir24_button.config(state="disabled")
+            self.status_label.config(text="Запись RBK и MIR24 остановлена")
+        else:
+            self.status_label.config(text=status)
             
     def update_status(self, message):
-        """Обновляет статусную строку."""
         self.status_label.config(text=message)
         
     def run(self):
-        """Запускает главный цикл приложения."""
         self.root.mainloop()
         
     def cleanup(self):
-        """Очистка ресурсов при закрытии."""
-        self.root.destroy()
+        try:
+            if self.root.winfo_exists():
+                self.root.destroy()
+                logger.info("Окно Tkinter успешно закрыто")
+        except Exception as e:
+            logger.error(f"Ошибка при закрытии окна Tkinter: {e}")

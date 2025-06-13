@@ -6,7 +6,7 @@ from tkinter import ttk, messagebox
 
 from UI import MonitoringUI
 from rbk_mir24_parser import process_rbk_mir24, stop_rbk_mir24
-from utils import setup_logging, run_async_task
+from utils import setup_logging
 from parser_lines import main as start_lines_monitoring, stop_subprocesses, start_force_capture, stop_force_capture
 from lines_to_csv import process_screenshots
 
@@ -22,47 +22,77 @@ class MonitoringApp:
 
         self.rbk_mir24_task = None
         self.rbk_mir24_running = False
+        self.process_list = []
         
         self.lines_monitoring_thread = None
         self.lines_monitoring_running = False
 
+        # Инициализируем event loop
+        self.loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(self.loop)
+        
+        # Запускаем event loop в отдельном потоке
+        self.thread = threading.Thread(
+            target=self.loop.run_forever,
+            daemon=True
+        )
+        self.thread.start()
+
         # Создаем и запускаем UI
         self.ui = MonitoringUI(self)
-        self.ui.run()
-
+        
     def start_rbk_mir24(self):
         """Запуск мониторинга RBK и MIR24."""
-        if not self.rbk_mir24_running:
-            self.rbk_mir24_running = True
-            self.rbk_mir24_task = asyncio.run_coroutine_threadsafe(
-                process_rbk_mir24(),
-                self.loop
-            )
-            self.ui.update_rbk_mir24_status("Запущен")
-            logger.info("Запущен мониторинг RBK и MIR24")
+        if not self.rbk_mir24_running and self.loop is not None:
+            try:
+                self.rbk_mir24_running = True
+                self.process_list.clear()
+                self.ui.update_status("Запуск записи RBK и MIR24...")
+                
+                # Запускаем запись
+                self.rbk_mir24_task = asyncio.run_coroutine_threadsafe(
+                    process_rbk_mir24(self, self.ui, True),
+                    self.loop
+                )
+                
+                self.ui.update_rbk_mir24_status("Запущен")
+                logger.info("Запущен мониторинг RBK и MIR24")
+            except Exception as e:
+                self.rbk_mir24_running = False
+                self.ui.update_rbk_mir24_status("Ошибка")
+                self.ui.update_status(f"Ошибка запуска записи: {str(e)}")
+                logger.error(f"Ошибка при запуске записи RBK и MIR24: {e}")
+                messagebox.showerror("Ошибка", f"Не удалось запустить запись: {str(e)}")
         else:
-            messagebox.showwarning("Предупреждение", "Мониторинг RBK и MIR24 уже запущен")
+            messagebox.showwarning("Предупреждение", "Мониторинг RBK и MIR24 уже запущен или event loop не инициализирован")
 
     def stop_rbk_mir24(self):
         """Остановка мониторинга RBK и MIR24."""
-        if self.rbk_mir24_running:
-            self.rbk_mir24_running = False
-            asyncio.run_coroutine_threadsafe(
-                stop_rbk_mir24(),
-                self.loop
-            )
-            self.ui.update_rbk_mir24_status("Остановлен")
-            logger.info("Остановлен мониторинг RBK и MIR24")
+        if self.rbk_mir24_running and self.loop is not None:
+            try:
+                self.rbk_mir24_running = False
+                self.ui.update_status("Остановка записи RBK и MIR24...")
+                
+                # Останавливаем задачу
+                asyncio.run_coroutine_threadsafe(
+                    stop_rbk_mir24(self, self.ui),
+                    self.loop
+                )
+                
+                self.ui.update_rbk_mir24_status("Остановлен")
+                logger.info("Остановлен мониторинг RBK и MIR24")
+            except Exception as e:
+                self.ui.update_status(f"Ошибка остановки записи: {str(e)}")
+                logger.error(f"Ошибка при остановке записи RBK и MIR24: {e}")
+                messagebox.showerror("Ошибка", f"Не удалось остановить запись: {str(e)}")
         else:
-            messagebox.showwarning("Предупреждение", "Мониторинг RBK и MIR24 уже остановлен")
+            messagebox.showwarning("Предупреждение", "Мониторинг RBK и MIR24 уже остановлен или event loop не инициализирован")
 
     def start_lines_monitoring(self):
         """Запуск мониторинга строк."""
         if not self.lines_monitoring_running:
             self.lines_monitoring_running = True
-            # Запускаем принудительный захват скриншотов
             start_force_capture()
-            # Запускаем поток мониторинга
             self.lines_monitoring_thread = threading.Thread(
                 target=start_lines_monitoring,
                 daemon=True
@@ -77,11 +107,8 @@ class MonitoringApp:
         """Остановка мониторинга строк."""
         if self.lines_monitoring_running:
             self.lines_monitoring_running = False
-            # Останавливаем принудительный захват
             stop_force_capture()
-            # Останавливаем все процессы
             stop_subprocesses()
-            # Ждем завершения потока мониторинга
             if self.lines_monitoring_thread and self.lines_monitoring_thread.is_alive():
                 self.lines_monitoring_thread.join(timeout=5.0)
             self.lines_monitoring_thread = None
@@ -94,7 +121,6 @@ class MonitoringApp:
         """Запуск сохранения строк в CSV."""
         try:
             self.ui.update_status("Сохранение строк в CSV...")
-            # Запускаем процесс сохранения в отдельном потоке
             thread = threading.Thread(
                 target=self._save_to_csv_task,
                 daemon=True
@@ -120,48 +146,36 @@ class MonitoringApp:
             self.ui.update_status("Ошибка при сохранении в CSV")
             messagebox.showerror("Ошибка", f"Не удалось сохранить строки в CSV: {e}")
 
-    def run(self):
-        """Запуск приложения."""
-        try:
-            # Создаем новый event loop
-            self.loop = asyncio.new_event_loop()
-            asyncio.set_event_loop(self.loop)
-            
-            # Запускаем event loop в отдельном потоке
-            self.thread = threading.Thread(
-                target=self.loop.run_forever,
-                daemon=True
-            )
-            self.thread.start()
-            
-            # Запускаем UI
-            self.ui.run()
-            
-        except Exception as e:
-            logger.error(f"Ошибка при запуске приложения: {e}")
-            if self.loop:
-                self.loop.stop()
-            if self.thread:
-                self.thread.join()
-
     def cleanup(self):
         """Очистка ресурсов при закрытии приложения."""
         try:
-            # Останавливаем мониторинг RBK и MIR24
+            # Сначала закрываем UI
+            logger.info("Закрытие UI")
+            self.ui.cleanup()
+            
             if self.rbk_mir24_running:
+                logger.info("Остановка мониторинга RBK и MIR24 в cleanup")
                 self.stop_rbk_mir24()
             
-            # Останавливаем мониторинг строк
             if self.lines_monitoring_running:
+                logger.info("Остановка мониторинга строк в cleanup")
                 self.stop_lines_monitoring()
             
-            # Останавливаем event loop
-            if self.loop:
-                self.loop.stop()
+            if self.loop and self.loop.is_running():
+                logger.info("Остановка асинхронного цикла")
+                self.loop.call_soon_threadsafe(self.loop.stop)
+                # Ждем завершения всех задач
+                pending = asyncio.all_tasks(self.loop)
+                if pending:
+                    self.loop.run_until_complete(asyncio.wait(pending, timeout=5.0))
+                # Закрываем цикл
+                self.loop.run_until_complete(self.loop.shutdown_asyncgens())
+                self.loop.close()
+                logger.info("Асинхронный цикл закрыт")
             
-            # Ждем завершения потока
-            if self.thread:
-                self.thread.join()
+            if self.thread and self.thread.is_alive():
+                logger.info("Ожидание завершения потока")
+                self.thread.join(timeout=5.0)
                 
         except Exception as e:
             logger.error(f"Ошибка при очистке ресурсов: {e}")
@@ -169,8 +183,10 @@ class MonitoringApp:
 if __name__ == "__main__":
     app = MonitoringApp()
     try:
-        app.run()
+        app.ui.run()
     except KeyboardInterrupt:
         logger.info("Получен сигнал завершения работы")
+    except Exception as e:
+        logger.error(f"Ошибка приложения: {e}")
     finally:
         app.cleanup()

@@ -22,7 +22,7 @@
     "MIR24": {
         "url": "https://hls-mirtv.cdnvideo.ru/mirtv-parampublish/mir24_2500/tracks-v1a1/mono.m3u8",
         "interval": "1/7",
-        "crop": "crop=1405:55:515:980"
+        "crop": "crop=1407:55:515:980"
     },
     "Izvestiya": {
         "url": "http://hls-igi.cdnvideo.ru/igi/igi_hq/tracks-v1a1/mono.ts.m3u8",
