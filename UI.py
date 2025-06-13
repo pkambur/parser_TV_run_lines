@@ -101,9 +101,18 @@ class MonitoringUI:
         self.root.mainloop()
         
     def cleanup(self):
+        """Очистка ресурсов при закрытии."""
         try:
-            if self.root.winfo_exists():
-                self.root.destroy()
+            if hasattr(self, 'root') and self.root:
+                try:
+                    self.root.quit()
+                except Exception:
+                    pass
+                try:
+                    self.root.destroy()
+                except Exception:
+                    pass
+                self.root = None
                 logger.info("Окно Tkinter успешно закрыто")
         except Exception as e:
             logger.error(f"Ошибка при закрытии окна Tkinter: {e}")

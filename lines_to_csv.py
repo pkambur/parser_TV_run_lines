@@ -1,306 +1,307 @@
 import os
+import pandas as pd
+from datetime import datetime
+import logging
 import cv2
 import pytesseract
-import pandas as pd
-import numpy as np
-import logging
-import re
-import json
-from datetime import datetime
-import shutil
 import asyncio
-from difflib import SequenceMatcher
-import warnings
-warnings.filterwarnings('ignore')
+import re
+import aiohttp
+import base64
+from PIL import Image
+import io
+import json
+from huggingface_hub import HfApi, InferenceClient
+import hashlib
+from collections import defaultdict
 
-# Настройка логирования
-os.makedirs("logs", exist_ok=True)
-logging.basicConfig(
-    level=logging.INFO,
-    format='%(asctime)s - %(levelname)s - %(message)s',
-    handlers=[
-        logging.FileHandler("logs/text_recognition_log.log", encoding='utf-8'),
-        logging.StreamHandler()
-    ]
-)
 logger = logging.getLogger(__name__)
 
-# Путь к Tesseract
-pytesseract.pytesseract.tesseract_cmd = r"C:\Program Files\Tesseract-OCR\tesseract.exe"
+# Инициализация Hugging Face API
+HF_API_TOKEN = os.getenv("HUGGINGFACE_HUB_TOKEN")
+if not HF_API_TOKEN:
+    logger.warning("HUGGINGFACE_HUB_TOKEN не установлен. Проверка текста будет ограничена.")
+    client = None
+else:
+    try:
+        # Проверяем валидность токена
+        api = HfApi()
+        api.whoami(token=HF_API_TOKEN)
+        client = InferenceClient(model="Qwen/Qwen2-VL-7B-Instruct", token=HF_API_TOKEN)
+        logger.info("Успешное подключение к Hugging Face API")
+    except Exception as e:
+        logger.error(f"Ошибка при инициализации Hugging Face API: {e}")
+        logger.warning("Проверка текста будет ограничена")
+        client = None
 
-# Папки
-base_dir = "screenshots"
-processed_dir = "screenshots_processed"
-
-# Создание папки для обработанных файлов
-os.makedirs(processed_dir, exist_ok=True)
-
-def is_valid_russian_text(text):
-    """Проверяет, является ли текст валидным русским текстом."""
-    if not text:
-        return False
-        
-    # Проверка на минимальную длину
-    if len(text) < 2:
-        return False
-        
-    # Проверка на наличие русских букв
-    if not re.search(r'[а-яА-Я]', text):
-        return False
-        
-    # Проверка на минимальное количество слов
-    words = text.split()
-    if len(words) < 2:
-        return False
-        
-    # Проверка на наличие слишком длинных слов (возможно, ошибка распознавания)
-    if any(len(word) > 20 for word in words):
-        return False
-        
-    # Проверка на наличие слишком много цифр
-    if len(re.findall(r'\d', text)) > len(text) * 0.3:
-        return False
-        
-    return True
-
-def clean_text(text):
-    """Очищает и нормализует текст."""
-    if not text:
-        return ""
-        
-    # Удаление специальных символов, оставляем только буквы, цифры и базовую пунктуацию
-    text = re.sub(r'[^\w\s.,!?;:()\-–—«»""\'\'№]', '', text)
-    
-    # Нормализация пробелов
-    text = re.sub(r'\s+', ' ', text)
-    
-    # Удаление одиночных символов
-    text = re.sub(r'\b[a-zA-Z0-9]\b', '', text)
-    
-    # Удаление лишних пробелов в начале и конце
-    text = text.strip()
-    
-    return text
-
-def text_similarity(text1, text2):
-    """Вычисляет схожесть между двумя текстами."""
-    if not text1 or not text2:
-        return 0.0
-    return SequenceMatcher(None, text1, text2).ratio()
-
-def is_similar_to_any(text, existing_texts, threshold=0.9):
-    """Проверяет, похож ли текст на любой из существующих текстов."""
-    for existing_text in existing_texts:
-        if text_similarity(text, existing_text) >= threshold:
-            return True
-    return False
-
-def preprocess_image(image):
+async def preprocess_image(image_path):
     """Предобработка изображения для улучшения распознавания текста."""
     try:
-        if image is None:
-            return None
-            
-        # Конвертация в оттенки серого
-        gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
-        
-        # Нормализация яркости
-        gray = cv2.normalize(gray, None, 0, 255, cv2.NORM_MINMAX)
-        
-        # Двусторонняя фильтрация для сохранения краев
-        bilateral = cv2.bilateralFilter(gray, 11, 17, 17)
-        
-        # Увеличение контраста
-        clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8,8))
-        contrast = clahe.apply(bilateral)
-        
-        # Адаптивная пороговая обработка
-        thresh = cv2.adaptiveThreshold(
-            contrast, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C, cv2.THRESH_BINARY, 15, 5
-        )
-        
-        # Морфологические операции
-        kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (2,2))
-        morph = cv2.morphologyEx(thresh, cv2.MORPH_CLOSE, kernel)
-        
-        # Увеличение резкости
-        sharpen_kernel = np.array([[-1,-1,-1], [-1,9,-1], [-1,-1,-1]])
-        sharpened = cv2.filter2D(morph, -1, sharpen_kernel)
-        
-        # Масштабирование изображения
-        scale_percent = 200
-        width = int(sharpened.shape[1] * scale_percent / 100)
-        height = int(sharpened.shape[0] * scale_percent / 100)
-        scaled = cv2.resize(sharpened, (width, height), interpolation=cv2.INTER_CUBIC)
-        
-        return scaled
+        img = cv2.imread(image_path, cv2.IMREAD_GRAYSCALE)
+        img = cv2.threshold(img, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)[1]
+        return img
     except Exception as e:
-        logger.error(f"Ошибка при обработке изображения: {e}")
+        logger.error(f"Ошибка при предобработке изображения {image_path}: {e}")
         return None
 
-def recognize_text(image):
-    """Распознавание текста из изображения."""
+async def recognize_text(image_path):
+    """Распознавание текста на изображении с помощью Tesseract."""
     try:
-        processed_img = preprocess_image(image)
-        if processed_img is None:
+        img = await preprocess_image(image_path)
+        if img is None:
             return ""
-            
-        # Попробовать разные режимы PSM для лучшего распознавания
-        configs = [
-            r'--oem 3 --psm 6 -l rus+eng --dpi 300',  # Блок текста
-            r'--oem 3 --psm 3 -l rus+eng --dpi 300',  # Автоопределение
-            r'--oem 3 --psm 11 -l rus+eng --dpi 300'  # Разреженный текст
-        ]
-        
-        texts = []
-        for config in configs:
-            text = pytesseract.image_to_string(processed_img, config=config)
-            text = clean_text(text)
-            if text and is_valid_russian_text(text):
-                texts.append(text)
-        
-        # Выбрать наиболее вероятный текст
-        if not texts:
-            return ""
-            
-        text = max(texts, key=len)  # Берем самый длинный текст
-        logger.info(f"Распознанный текст: '{text}'")
-        
-        return text
+        text = pytesseract.image_to_string(img, lang='rus+eng')
+        return text.strip()
     except Exception as e:
-        logger.error(f"Ошибка при распознавании текста: {e}")
+        logger.error(f"Ошибка при распознавании текста в {image_path}: {e}")
         return ""
 
-def has_keywords(text):
-    """Проверка наличия ключевых слов в тексте."""
-    return True
+async def is_similar_text(text1, text2, threshold=0.9):
+    """Проверка схожести двух текстов."""
+    from difflib import SequenceMatcher
+    return SequenceMatcher(None, text1, text2).ratio() > threshold
 
-def combine_texts(texts):
-    """Объединение текстов с проверкой ключевых слов."""
-    combined_texts = []
+async def combine_texts(texts):
+    """Объединение текстов, удаляя дубликаты."""
+    unique_texts = []
     for text in texts:
-        if not text:
-            continue
-            
-        logger.info(f"Обрабатываем текст: '{text}'")
-        combined_texts.append(text.strip())
-        logger.info(f"Сохранен текст: '{text.strip()}'")
-    return combined_texts
+        if text and not any(await is_similar_text(text, existing) for existing in unique_texts):
+            unique_texts.append(text)
+    return unique_texts
 
-def extract_frames(video_path, interval=1):
-    """Извлечение кадров из видео с заданным интервалом."""
-    frames = []
-    try:
-        cap = cv2.VideoCapture(video_path)
-        if not cap.isOpened():
-            logger.error(f"Не удалось открыть видео: {video_path}")
-            return frames
-            
-        fps = cap.get(cv2.CAP_PROP_FPS)
-        frame_interval = int(fps * interval)
-        frame_count = 0
-        
-        while cap.isOpened():
-            ret, frame = cap.read()
-            if not ret:
-                break
-                
-            if frame_count % frame_interval == 0:
-                frames.append(frame)
-            frame_count += 1
-            
-        cap.release()
-        logger.info(f"Извлечено {len(frames)} кадров из видео {video_path}")
-        return frames
-    except Exception as e:
-        logger.error(f"Ошибка при извлечении кадров из видео {video_path}: {e}")
-        return []
+async def is_readable_text(text, image_path):
+    """Проверка читаемости текста с использованием Qwen2.5-VL через Hugging Face Inference API."""
+    if not text:
+        logger.debug("Текст пустой")
+        return False, text
 
-async def process_file(file_path, channel_name, timestamp, existing_texts):
-    """Обработка одного файла (скриншот или видео)."""
-    try:
-        texts = []
-        if file_path.endswith(('.jpg', '.jpeg', '.png')):
-            image = cv2.imread(file_path)
-            if image is not None:
-                text = recognize_text(image)
-                if text and not is_similar_to_any(text, existing_texts):
-                    texts.append(text)
-                else:
-                    logger.info(f"Текст похож на существующий или пустой, файл будет удален: {file_path}")
-                    os.remove(file_path)
-                    return []
-        elif file_path.endswith(('.mp4', '.avi', '.mov')):
-            frames = extract_frames(file_path)
-            for frame in frames:
-                text = recognize_text(frame)
-                if text and not is_similar_to_any(text, existing_texts):
-                    texts.append(text)
-            if not texts:
-                logger.info(f"Не найдено новых текстов в видео, файл будет удален: {file_path}")
-                os.remove(file_path)
-        
-        return texts
+    # Удаляем специальные символы и цифры для проверки
+    clean_text = re.sub(r'[^а-яА-Яa-zA-Z\s]', '', text)
     
+    # Проверяем минимальную длину текста
+    if len(clean_text.strip()) < 5:
+        logger.debug(f"Текст слишком короткий: {clean_text}")
+        return False, text
+
+    # Проверяем наличие слов (более одного слова)
+    words = clean_text.strip().split()
+    if len(words) < 2:
+        logger.debug(f"Текст содержит слишком мало слов: {words}")
+        return False, text
+
+    # Если нет токена API или клиент не инициализирован, используем базовую проверку
+    if not HF_API_TOKEN or client is None:
+        logger.debug("Используется базовая проверка текста (без API)")
+        return len(words) >= 2 and len(clean_text.strip()) >= 5, text
+
+    # Используем Qwen2.5-VL через Inference API
+    try:
+        # Формируем промпт для исправления текста
+        prompt = (
+            f"Исправь следующий текст, распознанный с изображения, на русский или английский язык, "
+            f"сохраняя его смысл. Если текст бессмысленный или содержит слишком много ошибок, "
+            f"укажи, что он нечитаемый. Текст: '{text}'"
+        )
+
+        # Конвертируем изображение в base64
+        with Image.open(image_path) as image:
+            image = image.convert("RGB")
+            buffered = io.BytesIO()
+            image.save(buffered, format="JPEG")
+            image_base64 = base64.b64encode(buffered.getvalue()).decode("utf-8")
+
+        # Формируем данные для API
+        messages = [
+            {
+                "role": "user",
+                "content": [
+                    {"type": "text", "text": prompt},
+                    {"type": "image_url", "image_url": f"data:image/jpeg;base64,{image_base64}"}
+                ]
+            }
+        ]
+
+        # Отправляем асинхронный запрос к API
+        async with aiohttp.ClientSession() as session:
+            headers = {
+                "Authorization": f"Bearer {HF_API_TOKEN}",
+                "Content-Type": "application/json"
+            }
+            payload = {
+                "inputs": messages,
+                "parameters": {"max_new_tokens": 512}
+            }
+            
+            try:
+                async with session.post(
+                    "https://api-inference.huggingface.co/models/Qwen/Qwen2-VL-7B-Instruct",
+                    headers=headers,
+                    json=payload,
+                    timeout=30
+                ) as response:
+                    if response.status == 401:
+                        logger.error("Ошибка авторизации в Hugging Face API. Проверьте токен.")
+                        return len(words) >= 2 and len(clean_text.strip()) >= 5, text
+                    elif response.status != 200:
+                        logger.error(f"Ошибка API: {response.status} - {await response.text()}")
+                        return len(words) >= 2 and len(clean_text.strip()) >= 5, text
+                        
+                    result = await response.json()
+                    if isinstance(result, list) and result:
+                        corrected_text = result[0].get("generated_text", text)
+                    else:
+                        logger.error(f"Некорректный ответ API: {result}")
+                        return len(words) >= 2 and len(clean_text.strip()) >= 5, text
+
+                logger.debug(f"Qwen2.5-VL исправленный текст: {corrected_text}")
+                
+                # Проверяем, указала ли модель, что текст нечитаемый
+                if "нечитаемый" in corrected_text.lower() or "бессмысленный" in corrected_text.lower():
+                    logger.debug(f"Qwen2.5-VL определил текст как нечитаемый: {text}")
+                    return False, text
+                
+                # Проверяем исправленный текст на минимальные требования
+                clean_corrected = re.sub(r'[^а-яА-Яa-zA-Z\s]', '', corrected_text)
+                if len(clean_corrected.strip()) < 5 or len(clean_corrected.strip().split()) < 2:
+                    logger.debug(f"Исправленный текст не соответствует требованиям: {corrected_text}")
+                    return False, text
+                    
+                return True, corrected_text
+                
+            except asyncio.TimeoutError:
+                logger.error("Таймаут при обращении к API")
+                return len(words) >= 2 and len(clean_text.strip()) >= 5, text
+            except Exception as e:
+                logger.error(f"Ошибка при обращении к API: {e}")
+                return len(words) >= 2 and len(clean_text.strip()) >= 5, text
+                
+    except Exception as e:
+        logger.error(f"Ошибка при проверке текста в Qwen2.5-VL API: {e}")
+        logger.info("Используется упрощенная проверка текста")
+        return len(words) >= 2 and len(clean_text.strip()) >= 5, text
+
+class TextDuplicateChecker:
+    def __init__(self, similarity_threshold=0.9):
+        self.similarity_threshold = similarity_threshold
+        self.texts_by_channel = defaultdict(set)  # Хранит тексты по каналам
+        self.text_hashes = set()  # Хранит хеши всех текстов
+        
+    async def is_duplicate(self, text, channel_name):
+        """Проверяет, является ли текст дубликатом."""
+        # Сначала проверяем точное совпадение по хешу
+        text_hash = hashlib.sha256(text.encode('utf-8')).hexdigest()
+        if text_hash in self.text_hashes:
+            return True
+            
+        # Затем проверяем похожесть текста
+        for existing_text in self.texts_by_channel[channel_name]:
+            if await is_similar_text(text, existing_text, self.similarity_threshold):
+                return True
+                
+        # Если дубликат не найден, добавляем текст в хранилище
+        self.texts_by_channel[channel_name].add(text)
+        self.text_hashes.add(text_hash)
+        return False
+
+async def process_file(file_path, channel_name, duplicate_checker):
+    """Обработка одного файла (скриншота) с проверкой на дубликаты."""
+    try:
+        # Извлекаем timestamp из имени файла
+        file_name = os.path.basename(file_path)
+        try:
+            date_pattern = r'(\d{8})_(\d{6})'
+            match = re.search(date_pattern, file_name)
+            
+            if match:
+                date_str = match.group(1)  # YYYYMMDD
+                time_str = match.group(2)  # HHMMSS
+                
+                try:
+                    timestamp = datetime.strptime(f"{date_str}_{time_str}", "%Y%m%d_%H%M%S")
+                except ValueError:
+                    timestamp = datetime.now()
+                    logger.warning(f"Не удалось распарсить дату из имени файла {file_name}, используется текущее время")
+            else:
+                timestamp = datetime.now()
+                logger.warning(f"Не найден формат даты в имени файла {file_name}, используется текущее время")
+                
+        except Exception as e:
+            logger.warning(f"Ошибка при парсинге даты из имени файла {file_name}: {e}")
+            timestamp = datetime.now()
+
+        text = await recognize_text(file_path)
+        if not text:
+            logger.warning(f"Не удалось распознать текст в файле {file_path}")
+            os.remove(file_path)
+            logger.info(f"Удален файл с нечитаемым текстом: {file_path}")
+            return None
+            
+        is_readable, corrected_text = await is_readable_text(text, file_path)
+        if not is_readable:
+            logger.warning(f"Распознан нечитаемый текст в файле {file_path}: {text}")
+            os.remove(file_path)
+            logger.info(f"Удален файл с нечитаемым текстом: {file_path}")
+            return None
+
+        # Проверяем на дубликаты
+        if await duplicate_checker.is_duplicate(corrected_text, channel_name):
+            logger.info(f"Обнаружен дубликат текста в файле {file_path}: {corrected_text[:50]}...")
+            os.remove(file_path)
+            logger.info(f"Удален файл с дубликатом текста: {file_path}")
+            return None
+            
+        return {
+            "Channel": channel_name,
+            "Timestamp": timestamp.strftime("%Y-%m-%d %H:%M:%S"),
+            "Text": corrected_text,
+            "Source": file_path
+        }
     except Exception as e:
         logger.error(f"Ошибка при обработке файла {file_path}: {e}")
-        return []
+        return None
 
-async def process_channel(channel_name):
-    """Обработка всех файлов одного канала."""
+async def process_channel(channel_name, base_dir="screenshots", duplicate_checker=None):
+    """Обработка всех файлов в папке канала."""
+    results = []
     channel_dir = os.path.join(base_dir, channel_name)
     if not os.path.isdir(channel_dir):
-        return []
-
-    results = []
-    existing_texts = []
-
-    for filename in os.listdir(channel_dir):
-        if filename.endswith(('.jpg', '.jpeg', '.png', '.mp4', '.avi', '.mov')):
-            try:
-                timestamp_str = filename.replace(f"{channel_name}_", "").replace(".jpg", "").replace(".mp4", "")
-                timestamp = datetime.strptime(timestamp_str, "%Y-%m-%d_%H-%M-%S")
-                
-                file_path = os.path.join(channel_dir, filename)
-                texts = await process_file(file_path, channel_name, timestamp, existing_texts)
-                
-                if texts:
-                    combined_texts = combine_texts(texts)
-                    for text in combined_texts:
-                        results.append({
-                            "Channel": channel_name,
-                            "Timestamp": timestamp,
-                            "Text": text,
-                            "Source": filename
-                        })
-                        existing_texts.append(text)
-                    
-                    dest_path = os.path.join(processed_dir, filename)
-                    if os.path.exists(file_path):
-                        shutil.move(file_path, dest_path)
-                        logger.info(f"Файл перемещен в {dest_path}")
-                
-                await asyncio.sleep(0)
-                
-            except Exception as e:
-                logger.error(f"Ошибка при обработке файла {filename}: {e}")
-                continue
-
+        logger.warning(f"Папка {channel_dir} не является директорией")
+        return results
+    logger.info(f"Найдено файлов в папке {channel_dir}: {len(os.listdir(channel_dir))}")
+    for file_name in os.listdir(channel_dir):
+        file_path = os.path.join(channel_dir, file_name)
+        if os.path.isfile(file_path) and file_name.lower().endswith(('.png', '.jpg', '.jpeg')):
+            result = await process_file(file_path, channel_name, duplicate_checker)
+            if result:
+                results.append(result)
+    logger.info(f"Обработано файлов для канала {channel_name}: {len(results)}")
     return results
 
-async def process_screenshots():
-    """Основная функция обработки всех каналов."""
+async def process_screenshots(base_dir="screenshots"):
+    """Основная функция обработки всех каналов и сохранения в CSV и Excel."""
     try:
         if not os.path.exists(base_dir):
             logger.error(f"Папка {base_dir} не найдена")
             return None, None
 
         all_results = []
+        duplicate_checker = TextDuplicateChecker()  # Инициализируем проверку дубликатов
+        logger.info(f"Сканирование директории: {base_dir}")
+        logger.info(f"Найдено каналов: {len(os.listdir(base_dir))}")
+        
+        # Список папок, которые нужно исключить
+        excluded_folders = ["RBK", "MIR24", "TVC", "NTV"]
+        
         for channel_name in os.listdir(base_dir):
+            if channel_name in excluded_folders:
+                logger.info(f"Пропуск папки {channel_name} (исключена из обработки)")
+                continue
+                
             channel_dir = os.path.join(base_dir, channel_name)
             if os.path.isdir(channel_dir):
                 logger.info(f"Обработка канала: {channel_name}")
-                results = await process_channel(channel_name)
+                results = await process_channel(channel_name, base_dir, duplicate_checker)
+                logger.info(f"Результаты для канала {channel_name}: {len(results)} записей")
                 all_results.extend(results)
 
         if not all_results:
@@ -308,11 +309,32 @@ async def process_screenshots():
             return None, None
 
         timestamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
-        output_file = f"logs/recognized_text_{timestamp}.csv"
+        
+        # Создаём директорию logs, если не существует
+        os.makedirs("logs", exist_ok=True)
+        
+        # Сохраняем в CSV
+        csv_file = f"logs/recognized_text_{timestamp}.csv"
         df = pd.DataFrame(all_results)
-        df.to_csv(output_file, index=False, encoding='utf-8-sig')
-        logger.info(f"Результаты сохранены в {output_file}")
-        return output_file, [r["Source"] for r in all_results]
+        df.to_csv(csv_file, index=False, encoding='utf-8-sig')
+        logger.info(f"Результаты сохранены в CSV: {csv_file}")
+        
+        # Проверяем наличие CSV на диске
+        if not os.path.exists(csv_file):
+            logger.error(f"CSV-файл {csv_file} не был создан")
+            return None, None
+            
+        # Сохраняем в Excel, если openpyxl установлен
+        excel_file = f"logs/recognized_text_{timestamp}.xlsx"
+        try:
+            df.to_excel(excel_file, index=False, engine='openpyxl')
+            logger.info(f"Результаты сохранены в Excel: {excel_file}")
+        except ImportError:
+            logger.warning("Библиотека openpyxl не установлена, пропуск сохранения в Excel")
+        except Exception as e:
+            logger.error(f"Ошибка при сохранении в Excel: {e}")
+        
+        return csv_file, [r["Source"] for r in all_results]
 
     except Exception as e:
         logger.error(f"Ошибка при обработке файлов: {e}")

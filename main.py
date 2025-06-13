@@ -121,6 +121,7 @@ class MonitoringApp:
         """Запуск сохранения строк в CSV."""
         try:
             self.ui.update_status("Сохранение строк в CSV...")
+            # Запускаем процесс сохранения в отдельном потоке
             thread = threading.Thread(
                 target=self._save_to_csv_task,
                 daemon=True
@@ -134,13 +135,23 @@ class MonitoringApp:
     def _save_to_csv_task(self):
         """Задача сохранения строк в CSV."""
         try:
-            output_file, screenshots = process_screenshots()
-            if output_file:
-                self.ui.update_status(f"Сохранено в {output_file}")
-                messagebox.showinfo("Успех", f"Строки сохранены в файл: {output_file}")
+            # Используем существующий event loop для запуска process_screenshots
+            future = asyncio.run_coroutine_threadsafe(process_screenshots(), self.loop)
+            result = future.result(timeout=60)  # Ждем завершения задачи с таймаутом 60 секунд
+            logger.info(f"Результат process_screenshots: {result}")
+            
+            if isinstance(result, tuple) and len(result) == 2:
+                output_file, screenshots = result
+                if output_file:
+                    self.ui.update_status(f"Сохранено в {output_file}")
+                    messagebox.showinfo("Успех", f"Строки сохранены в файл: {output_file}")
+                else:
+                    self.ui.update_status("Ошибка сохранения: результат пустой")
+                    messagebox.showerror("Ошибка", "Не удалось сохранить строки в CSV: пустой результат")
             else:
-                self.ui.update_status("Ошибка сохранения")
-                messagebox.showerror("Ошибка", "Не удалось сохранить строки в CSV")
+                logger.error(f"Некорректный формат результата: {result}")
+                self.ui.update_status("Ошибка: неверный формат результата")
+                messagebox.showerror("Ошибка", f"Неверный формат результата при сохранении в CSV: {result}")
         except Exception as e:
             logger.error(f"Ошибка при сохранении в CSV: {e}")
             self.ui.update_status("Ошибка при сохранении в CSV")
@@ -161,18 +172,24 @@ class MonitoringApp:
                 logger.info("Остановка мониторинга строк в cleanup")
                 self.stop_lines_monitoring()
             
+            # Останавливаем event loop
             if self.loop and self.loop.is_running():
                 logger.info("Остановка асинхронного цикла")
-                self.loop.call_soon_threadsafe(self.loop.stop)
-                # Ждем завершения всех задач
-                pending = asyncio.all_tasks(self.loop)
-                if pending:
-                    self.loop.run_until_complete(asyncio.wait(pending, timeout=5.0))
-                # Закрываем цикл
-                self.loop.run_until_complete(self.loop.shutdown_asyncgens())
-                self.loop.close()
-                logger.info("Асинхронный цикл закрыт")
+                try:
+                    # Отменяем все задачи
+                    for task in asyncio.all_tasks(self.loop):
+                        task.cancel()
+                    
+                    # Останавливаем цикл
+                    self.loop.stop()
+                    
+                    # Закрываем цикл
+                    self.loop.close()
+                    logger.info("Асинхронный цикл закрыт")
+                except Exception as e:
+                    logger.error(f"Ошибка при остановке event loop: {e}")
             
+            # Ждем завершения потока
             if self.thread and self.thread.is_alive():
                 logger.info("Ожидание завершения потока")
                 self.thread.join(timeout=5.0)
