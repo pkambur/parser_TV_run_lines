@@ -3,12 +3,16 @@ import threading
 import asyncio
 import tkinter as tk
 from tkinter import ttk, messagebox
+import os
+import csv
+from datetime import datetime
 
 from UI import MonitoringUI
 from rbk_mir24_parser import process_rbk_mir24, stop_rbk_mir24
 from utils import setup_logging
 from parser_lines import main as start_lines_monitoring, stop_subprocesses, start_force_capture, stop_force_capture
 from lines_to_csv import process_screenshots
+from telegram_sender import send_files
 
 # Инициализация логирования
 logger = setup_logging()
@@ -157,6 +161,63 @@ class MonitoringApp:
             self.ui.update_status("Ошибка при сохранении в CSV")
             messagebox.showerror("Ошибка", f"Не удалось сохранить строки в CSV: {e}")
 
+    def send_to_telegram(self):
+        """Отправка строк в Telegram."""
+        try:
+            self.ui.update_status("Отправка строк в Telegram...")
+            # Запускаем процесс сохранения в отдельном потоке
+            thread = threading.Thread(
+                target=self._send_to_telegram_task,
+                daemon=True
+            )
+            thread.start()
+        except Exception as e:
+            logger.error(f"Ошибка при запуске отправки в Telegram: {e}")
+            self.ui.update_status("Ошибка при отправке в Telegram")
+            messagebox.showerror("Ошибка", f"Не удалось отправить строки в Telegram: {e}")
+
+    def _send_to_telegram_task(self):
+        """Задача отправки строк в Telegram."""
+        try:
+            # Проверяем наличие файлов в screenshots_processed
+            processed_dir = "screenshots_processed"
+            if not os.path.exists(processed_dir):
+                os.makedirs(processed_dir)
+                logger.info(f"Создана директория {processed_dir}")
+
+            # Получаем список файлов из директории screenshots_processed
+            screenshot_files = []
+            for file in os.listdir(processed_dir):
+                if file.endswith(('.jpg', '.jpeg', '.png')):
+                    screenshot_files.append([file])
+
+            if not screenshot_files:
+                self.ui.update_status("Нет скриншотов для отправки")
+                messagebox.showwarning("Предупреждение", "Нет скриншотов для отправки в Telegram")
+                return
+
+            # Находим последний Excel файл в папке logs
+            logs_dir = "logs"
+            excel_files = [f for f in os.listdir(logs_dir) if f.endswith('.xlsx')]
+            if not excel_files:
+                self.ui.update_status("Нет Excel файла для отправки")
+                messagebox.showwarning("Предупреждение", "Нет Excel файла для отправки в Telegram")
+                return
+
+            # Сортируем файлы по времени создания и берем последний
+            latest_excel = max(excel_files, key=lambda x: os.path.getctime(os.path.join(logs_dir, x)))
+            excel_path = os.path.join(logs_dir, latest_excel)
+
+            # Отправляем файлы в Telegram
+            send_files(excel_path, screenshot_files)
+            self.ui.update_status("Файлы отправлены в Telegram")
+            messagebox.showinfo("Успех", "Файлы успешно отправлены в Telegram")
+
+        except Exception as e:
+            logger.error(f"Ошибка при отправке в Telegram: {e}")
+            self.ui.update_status("Ошибка при отправке в Telegram")
+            messagebox.showerror("Ошибка", f"Не удалось отправить файлы в Telegram: {e}")
+
     def cleanup(self):
         """Очистка ресурсов при закрытии приложения."""
         try:
@@ -181,7 +242,11 @@ class MonitoringApp:
                         task.cancel()
                     
                     # Останавливаем цикл
-                    self.loop.stop()
+                    self.loop.call_soon_threadsafe(self.loop.stop)
+                    
+                    # Даем время на завершение задач
+                    if self.thread and self.thread.is_alive():
+                        self.thread.join(timeout=5.0)
                     
                     # Закрываем цикл
                     self.loop.close()
@@ -189,11 +254,6 @@ class MonitoringApp:
                 except Exception as e:
                     logger.error(f"Ошибка при остановке event loop: {e}")
             
-            # Ждем завершения потока
-            if self.thread and self.thread.is_alive():
-                logger.info("Ожидание завершения потока")
-                self.thread.join(timeout=5.0)
-                
         except Exception as e:
             logger.error(f"Ошибка при очистке ресурсов: {e}")
 

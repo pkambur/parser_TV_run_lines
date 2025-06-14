@@ -9,7 +9,7 @@ class MonitoringUI:
         self.app = app
         self.root = tk.Tk()
         self.root.title("Мониторинг телеканалов")
-        self.root.geometry("400x300")
+        self.root.geometry("500x300")
         
         self.create_widgets()
         
@@ -62,12 +62,23 @@ class MonitoringUI:
         )
         self.stop_rbk_mir24_button.pack(side="left", padx=5)
         
+        # Создаем фрейм для кнопок сохранения и отправки
+        save_buttons_frame = ttk.Frame(self.root)
+        save_buttons_frame.pack(pady=10)
+        
         self.save_csv_button = ttk.Button(
-            self.root,
+            save_buttons_frame,
             text="Сохранить строки в CSV",
             command=self.app.start_save_to_csv
         )
-        self.save_csv_button.pack(pady=10)
+        self.save_csv_button.pack(side="left", padx=5)
+        
+        self.send_telegram_button = ttk.Button(
+            save_buttons_frame,
+            text="Отправить строки",
+            command=self.app.send_to_telegram
+        )
+        self.send_telegram_button.pack(side="left", padx=5)
         
         self.status_label = ttk.Label(self.root, text="Готов к работе")
         self.status_label.pack(side="bottom", fill="x", padx=10, pady=5)
