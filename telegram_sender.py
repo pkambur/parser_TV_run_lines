@@ -64,6 +64,7 @@ def process_image(image_path):
 async def send_to_telegram(excel_file, screenshot_files):
     try:
         bot = Bot(token=TELEGRAM_TOKEN)
+        sent_files = []  # Список для отслеживания успешно отправленных файлов
 
         # Send Excel file
         if os.path.exists(excel_file):
@@ -75,6 +76,7 @@ async def send_to_telegram(excel_file, screenshot_files):
                     parse_mode=ParseMode.HTML
                 )
                 logger.info(f"Sent Excel file {excel_file} to Telegram")
+                sent_files.append(excel_file)
         else:
             logger.warning(f"Excel file not found: {excel_file}")
             raise FileNotFoundError(f"Excel file not found: {excel_file}")
@@ -94,12 +96,21 @@ async def send_to_telegram(excel_file, screenshot_files):
                                     parse_mode=ParseMode.HTML
                                 )
                                 logger.info(f"Sent screenshot {screenshot} to Telegram")
+                                sent_files.append(screenshot_path)
                         except Exception as e:
                             logger.error(f"Error sending screenshot {screenshot}: {e}")
                     else:
                         logger.warning(f"Screenshot {screenshot} not found at {screenshot_path}")
         else:
             logger.info("No screenshots to send")
+
+        # Удаляем отправленные файлы
+        for file_path in sent_files:
+            try:
+                os.remove(file_path)
+                logger.info(f"Deleted file after sending: {file_path}")
+            except Exception as e:
+                logger.error(f"Error deleting file {file_path}: {e}")
 
     except Exception as e:
         logger.error(f"Error sending to Telegram: {e}")
@@ -116,7 +127,7 @@ def send_files(excel_file, screenshot_files):
         
         # Запускаем отправку
         loop.run_until_complete(send_to_telegram(excel_file, screenshot_files))
-        logger.info("Files sent successfully")
+        logger.info("Files sent and deleted successfully")
     except Exception as e:
         logger.error(f"Failed to send files: {e}")
         raise

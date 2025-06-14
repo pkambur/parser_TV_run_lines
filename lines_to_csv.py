@@ -351,7 +351,7 @@ async def process_channel(channel_name, base_dir="screenshots", duplicate_checke
     return results
 
 async def process_screenshots(base_dir="screenshots"):
-    """Основная функция обработки всех каналов и сохранения в CSV и Excel."""
+    """Основная функция обработки всех каналов и сохранения в Excel."""
     try:
         if not os.path.exists(base_dir):
             logger.error(f"Папка {base_dir} не найдена")
@@ -386,28 +386,20 @@ async def process_screenshots(base_dir="screenshots"):
         # Создаём директорию logs, если не существует
         os.makedirs("logs", exist_ok=True)
         
-        # Сохраняем в CSV
-        csv_file = f"logs/recognized_text_{timestamp}.csv"
-        df = pd.DataFrame(all_results)
-        df.to_csv(csv_file, index=False, encoding='utf-8-sig')
-        logger.info(f"Результаты сохранены в CSV: {csv_file}")
-        
-        # Проверяем наличие CSV на диске
-        if not os.path.exists(csv_file):
-            logger.error(f"CSV-файл {csv_file} не был создан")
-            return None, None
-            
-        # Сохраняем в Excel, если openpyxl установлен
+        # Сохраняем в Excel
         excel_file = f"logs/recognized_text_{timestamp}.xlsx"
         try:
+            df = pd.DataFrame(all_results)
             df.to_excel(excel_file, index=False, engine='openpyxl')
             logger.info(f"Результаты сохранены в Excel: {excel_file}")
         except ImportError:
-            logger.warning("Библиотека openpyxl не установлена, пропуск сохранения в Excel")
+            logger.error("Библиотека openpyxl не установлена, невозможно сохранить результаты")
+            return None, None
         except Exception as e:
             logger.error(f"Ошибка при сохранении в Excel: {e}")
+            return None, None
         
-        return csv_file, [r["Source"] for r in all_results]
+        return excel_file, [r["Source"] for r in all_results]
 
     except Exception as e:
         logger.error(f"Ошибка при обработке файлов: {e}")
