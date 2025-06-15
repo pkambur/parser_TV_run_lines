@@ -66,6 +66,7 @@ class MonitoringApp:
     def _run_scheduler(self):
         """Выполнение планировщика задач."""
         logger.info("Настройка расписания задач...")
+        self.ui.update_scheduler_status("Настройка расписания...")
         
         # Настройка расписания для R1
         for hour in range(5, 10):
@@ -103,16 +104,19 @@ class MonitoringApp:
             logger.info(f"Добавлено расписание для TVC: {time_str}")
 
         logger.info("Расписание настроено, начинаем выполнение...")
+        self.ui.update_scheduler_status("Активен")
         while self.scheduler_running:
             try:
                 schedule.run_pending()
                 time_module.sleep(1)
             except Exception as e:
                 logger.error(f"Ошибка в планировщике: {e}")
+                self.ui.update_scheduler_status(f"Ошибка: {str(e)}")
 
     def _start_r1_monitoring(self):
         """Запуск мониторинга для R1."""
         logger.info("Попытка запуска мониторинга R1...")
+        self.ui.update_lines_scheduler_status("Запуск R1...")
         if not self.lines_monitoring_running:
             try:
                 self.lines_monitoring_running = True
@@ -123,17 +127,21 @@ class MonitoringApp:
                 )
                 self.lines_monitoring_thread.start()
                 logger.info("Запущен мониторинг R1 по расписанию")
-                # Останавливаем через 30 минут
-                threading.Timer(1800, self.stop_lines_monitoring).start()
+                self.ui.update_lines_scheduler_status("R1 активен")
+                # Останавливаем через 30 минут и обрабатываем скриншоты
+                threading.Timer(1800, self._process_and_send_screenshots).start()
             except Exception as e:
                 logger.error(f"Ошибка при запуске мониторинга R1: {e}")
                 self.lines_monitoring_running = False
+                self.ui.update_lines_scheduler_status(f"Ошибка R1: {str(e)}")
         else:
             logger.warning("Мониторинг уже запущен, пропускаем запуск R1")
+            self.ui.update_lines_scheduler_status("R1 пропущен (уже запущен)")
 
     def _start_zvezda_monitoring(self):
         """Запуск мониторинга для Zvezda."""
         logger.info("Попытка запуска мониторинга Zvezda...")
+        self.ui.update_lines_scheduler_status("Запуск Zvezda...")
         if not self.lines_monitoring_running:
             try:
                 self.lines_monitoring_running = True
@@ -144,17 +152,21 @@ class MonitoringApp:
                 )
                 self.lines_monitoring_thread.start()
                 logger.info("Запущен мониторинг Zvezda по расписанию")
-                # Останавливаем через 10 минут
-                threading.Timer(600, self.stop_lines_monitoring).start()
+                self.ui.update_lines_scheduler_status("Zvezda активен")
+                # Останавливаем через 10 минут и обрабатываем скриншоты
+                threading.Timer(600, self._process_and_send_screenshots).start()
             except Exception as e:
                 logger.error(f"Ошибка при запуске мониторинга Zvezda: {e}")
                 self.lines_monitoring_running = False
+                self.ui.update_lines_scheduler_status(f"Ошибка Zvezda: {str(e)}")
         else:
             logger.warning("Мониторинг уже запущен, пропускаем запуск Zvezda")
+            self.ui.update_lines_scheduler_status("Zvezda пропущен (уже запущен)")
 
     def _start_other_channels_monitoring(self):
         """Запуск мониторинга для остальных каналов."""
         logger.info("Попытка запуска мониторинга остальных каналов...")
+        self.ui.update_lines_scheduler_status("Запуск других каналов...")
         if not self.lines_monitoring_running:
             try:
                 self.lines_monitoring_running = True
@@ -165,13 +177,16 @@ class MonitoringApp:
                 )
                 self.lines_monitoring_thread.start()
                 logger.info("Запущен мониторинг остальных каналов по расписанию")
-                # Останавливаем через 20 минут
-                threading.Timer(1200, self.stop_lines_monitoring).start()
+                self.ui.update_lines_scheduler_status("Другие каналы активны")
+                # Останавливаем через 20 минут и обрабатываем скриншоты
+                threading.Timer(1200, self._process_and_send_screenshots).start()
             except Exception as e:
                 logger.error(f"Ошибка при запуске мониторинга остальных каналов: {e}")
                 self.lines_monitoring_running = False
+                self.ui.update_lines_scheduler_status(f"Ошибка других каналов: {str(e)}")
         else:
             logger.warning("Мониторинг уже запущен, пропускаем запуск остальных каналов")
+            self.ui.update_lines_scheduler_status("Другие каналы пропущены (уже запущены)")
 
     def start_lines_monitoring(self):
         """Запуск мониторинга строк по кнопке."""
@@ -297,10 +312,11 @@ class MonitoringApp:
             messagebox.showerror("Ошибка", f"Не удалось сохранить строки в CSV: {e}")
 
     def send_to_telegram(self):
-        """Отправка строк в Telegram."""
+        """Отправка файлов в Telegram."""
         try:
-            self.ui.update_status("Отправка строк в Telegram...")
-            # Запускаем процесс сохранения в отдельном потоке
+            self.ui.update_status("Отправка файлов в Telegram...")
+            self.ui.update_processing_status("Подготовка файлов...")
+            # Запускаем процесс отправки в отдельном потоке
             thread = threading.Thread(
                 target=self._send_to_telegram_task,
                 daemon=True
@@ -309,12 +325,26 @@ class MonitoringApp:
         except Exception as e:
             logger.error(f"Ошибка при запуске отправки в Telegram: {e}")
             self.ui.update_status("Ошибка при отправке в Telegram")
-            messagebox.showerror("Ошибка", f"Не удалось отправить строки в Telegram: {e}")
+            self.ui.update_processing_status(f"Ошибка: {str(e)}")
+            messagebox.showerror("Ошибка", f"Не удалось отправить файлы в Telegram: {e}")
 
     def _send_to_telegram_task(self):
-        """Задача отправки строк в Telegram."""
+        """Задача отправки файлов в Telegram."""
         try:
-            # Проверяем наличие файлов в screenshots_processed
+            files_sent = False
+            
+            # Проверяем наличие видео файлов
+            video_dir = "video"
+            if os.path.exists(video_dir) and os.listdir(video_dir):
+                self.ui.update_processing_status("Отправка видео файлов...")
+                from telegram_sender import send_video_files_sync
+                send_video_files_sync()
+                self.ui.update_processing_status("Видео файлы отправлены")
+                files_sent = True
+            else:
+                logger.info("Нет видео файлов для отправки")
+            
+            # Проверяем наличие скриншотов
             processed_dir = "screenshots_processed"
             if not os.path.exists(processed_dir):
                 os.makedirs(processed_dir)
@@ -326,36 +356,45 @@ class MonitoringApp:
                 if file.endswith(('.jpg', '.jpeg', '.png')):
                     screenshot_files.append([file])
 
-            if not screenshot_files:
-                self.ui.update_status("Нет скриншотов для отправки")
-                messagebox.showwarning("Предупреждение", "Нет скриншотов для отправки в Telegram")
-                return
+            if screenshot_files:
+                # Находим последний Excel файл в папке logs
+                logs_dir = "logs"
+                excel_files = [f for f in os.listdir(logs_dir) if f.endswith('.xlsx')]
+                if excel_files:
+                    # Сортируем файлы по времени создания и берем последний
+                    latest_excel = max(excel_files, key=lambda x: os.path.getctime(os.path.join(logs_dir, x)))
+                    excel_path = os.path.join(logs_dir, latest_excel)
 
-            # Находим последний Excel файл в папке logs
-            logs_dir = "logs"
-            excel_files = [f for f in os.listdir(logs_dir) if f.endswith('.xlsx')]
-            if not excel_files:
-                self.ui.update_status("Нет Excel файла для отправки")
-                messagebox.showwarning("Предупреждение", "Нет Excel файла для отправки в Telegram")
-                return
+                    # Отправляем скриншоты и Excel в Telegram
+                    self.ui.update_processing_status("Отправка скриншотов и Excel...")
+                    from telegram_sender import send_files
+                    send_files(excel_path, screenshot_files)
+                    self.ui.update_processing_status("Скриншоты и Excel отправлены")
+                    files_sent = True
+                else:
+                    logger.info("Нет Excel файла для отправки")
+            else:
+                logger.info("Нет скриншотов для отправки")
 
-            # Сортируем файлы по времени создания и берем последний
-            latest_excel = max(excel_files, key=lambda x: os.path.getctime(os.path.join(logs_dir, x)))
-            excel_path = os.path.join(logs_dir, latest_excel)
-
-            # Отправляем файлы в Telegram
-            send_files(excel_path, screenshot_files)
-            self.ui.update_status("Файлы отправлены в Telegram")
-            messagebox.showinfo("Успех", "Файлы успешно отправлены в Telegram")
+            if files_sent:
+                self.ui.update_status("Файлы отправлены в Telegram")
+                self.ui.update_processing_status("Отправка завершена")
+                messagebox.showinfo("Успех", "Файлы успешно отправлены в Telegram")
+            else:
+                self.ui.update_status("Нет файлов для отправки")
+                self.ui.update_processing_status("Нет файлов для отправки")
+                messagebox.showinfo("Информация", "Нет файлов для отправки в Telegram")
 
         except Exception as e:
             logger.error(f"Ошибка при отправке в Telegram: {e}")
             self.ui.update_status("Ошибка при отправке в Telegram")
+            self.ui.update_processing_status(f"Ошибка: {str(e)}")
             messagebox.showerror("Ошибка", f"Не удалось отправить файлы в Telegram: {e}")
 
     def _start_rbk_mir24_monitoring(self):
         """Запуск мониторинга RBK и MIR24."""
         logger.info("Попытка запуска мониторинга RBK и MIR24...")
+        self.ui.update_rbk_mir24_scheduler_status("Запуск RBK и MIR24...")
         if not self.rbk_mir24_running:
             try:
                 self.rbk_mir24_running = True
@@ -369,18 +408,22 @@ class MonitoringApp:
                 )
                 
                 self.ui.update_rbk_mir24_status("Запущен")
+                self.ui.update_rbk_mir24_scheduler_status("RBK и MIR24 активны")
                 logger.info("Запущен мониторинг RBK и MIR24 по расписанию")
-                # Останавливаем через 20 минут
-                threading.Timer(1200, self.stop_rbk_mir24).start()
+                # Останавливаем через 20 минут и отправляем файлы
+                threading.Timer(1200, self._process_and_send_video_files).start()
             except Exception as e:
                 logger.error(f"Ошибка при запуске мониторинга RBK и MIR24: {e}")
                 self.rbk_mir24_running = False
+                self.ui.update_rbk_mir24_scheduler_status(f"Ошибка RBK и MIR24: {str(e)}")
         else:
             logger.warning("Мониторинг RBK и MIR24 уже запущен")
+            self.ui.update_rbk_mir24_scheduler_status("RBK и MIR24 пропущены (уже запущены)")
 
     def _start_rentv_monitoring(self):
         """Запуск мониторинга RenTV."""
         logger.info("Попытка запуска мониторинга RenTV...")
+        self.ui.update_rbk_mir24_scheduler_status("Запуск RenTV...")
         if not self.rbk_mir24_running:
             try:
                 self.rbk_mir24_running = True
@@ -394,18 +437,22 @@ class MonitoringApp:
                 )
                 
                 self.ui.update_rbk_mir24_status("Запущен")
+                self.ui.update_rbk_mir24_scheduler_status("RenTV активен")
                 logger.info("Запущен мониторинг RenTV по расписанию")
-                # Останавливаем через 10 минут
-                threading.Timer(600, self.stop_rbk_mir24).start()
+                # Останавливаем через 10 минут и отправляем файлы
+                threading.Timer(600, self._process_and_send_video_files).start()
             except Exception as e:
                 logger.error(f"Ошибка при запуске мониторинга RenTV: {e}")
                 self.rbk_mir24_running = False
+                self.ui.update_rbk_mir24_scheduler_status(f"Ошибка RenTV: {str(e)}")
         else:
             logger.warning("Мониторинг уже запущен, пропускаем запуск RenTV")
+            self.ui.update_rbk_mir24_scheduler_status("RenTV пропущен (уже запущен)")
 
     def _start_ntv_monitoring(self):
         """Запуск мониторинга NTV."""
         logger.info("Попытка запуска мониторинга NTV...")
+        self.ui.update_rbk_mir24_scheduler_status("Запуск NTV...")
         if not self.rbk_mir24_running:
             try:
                 self.rbk_mir24_running = True
@@ -419,18 +466,22 @@ class MonitoringApp:
                 )
                 
                 self.ui.update_rbk_mir24_status("Запущен")
+                self.ui.update_rbk_mir24_scheduler_status("NTV активен")
                 logger.info("Запущен мониторинг NTV по расписанию")
-                # Останавливаем через 10 минут
-                threading.Timer(600, self.stop_rbk_mir24).start()
+                # Останавливаем через 10 минут и отправляем файлы
+                threading.Timer(600, self._process_and_send_video_files).start()
             except Exception as e:
                 logger.error(f"Ошибка при запуске мониторинга NTV: {e}")
                 self.rbk_mir24_running = False
+                self.ui.update_rbk_mir24_scheduler_status(f"Ошибка NTV: {str(e)}")
         else:
             logger.warning("Мониторинг уже запущен, пропускаем запуск NTV")
+            self.ui.update_rbk_mir24_scheduler_status("NTV пропущен (уже запущен)")
 
     def _start_tvc_monitoring(self):
         """Запуск мониторинга TVC."""
         logger.info("Попытка запуска мониторинга TVC...")
+        self.ui.update_rbk_mir24_scheduler_status("Запуск TVC...")
         if not self.rbk_mir24_running:
             try:
                 self.rbk_mir24_running = True
@@ -444,14 +495,47 @@ class MonitoringApp:
                 )
                 
                 self.ui.update_rbk_mir24_status("Запущен")
+                self.ui.update_rbk_mir24_scheduler_status("TVC активен")
                 logger.info("Запущен мониторинг TVC по расписанию")
-                # Останавливаем через 10 минут
-                threading.Timer(600, self.stop_rbk_mir24).start()
+                # Останавливаем через 10 минут и отправляем файлы
+                threading.Timer(600, self._process_and_send_video_files).start()
             except Exception as e:
                 logger.error(f"Ошибка при запуске мониторинга TVC: {e}")
                 self.rbk_mir24_running = False
+                self.ui.update_rbk_mir24_scheduler_status(f"Ошибка TVC: {str(e)}")
         else:
             logger.warning("Мониторинг уже запущен, пропускаем запуск TVC")
+            self.ui.update_rbk_mir24_scheduler_status("TVC пропущен (уже запущен)")
+
+    def _process_and_send_video_files(self):
+        """Обработка и отправка видео файлов."""
+        try:
+            # Останавливаем запись
+            self.stop_rbk_mir24()
+            self.ui.update_processing_status("Обработка видео файлов...")
+            
+            # Отправляем файлы в Telegram
+            self.send_to_telegram()
+            self.ui.update_processing_status("Видео файлы отправлены")
+            logger.info("Видео файлы обработаны и отправлены")
+        except Exception as e:
+            logger.error(f"Ошибка при обработке и отправке видео файлов: {e}")
+            self.ui.update_processing_status(f"Ошибка: {str(e)}")
+
+    def _process_and_send_screenshots(self):
+        """Обработка и отправка скриншотов."""
+        try:
+            # Останавливаем мониторинг
+            self.stop_lines_monitoring()
+            self.ui.update_processing_status("Обработка скриншотов...")
+            
+            # Обрабатываем скриншоты и отправляем в Telegram
+            self.start_save_to_csv()
+            self.ui.update_processing_status("Скриншоты обработаны и отправлены")
+            logger.info("Скриншоты обработаны и отправлены")
+        except Exception as e:
+            logger.error(f"Ошибка при обработке и отправке скриншотов: {e}")
+            self.ui.update_processing_status(f"Ошибка: {str(e)}")
 
     def cleanup(self):
         """Очистка ресурсов при закрытии приложения."""

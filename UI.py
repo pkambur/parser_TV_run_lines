@@ -9,16 +9,27 @@ class MonitoringUI:
         self.app = app
         self.root = tk.Tk()
         self.root.title("Мониторинг телеканалов")
-        self.root.geometry("500x300")
+        self.root.geometry("600x500")  # Увеличиваем размер окна
         
         self.create_widgets()
         
     def create_widgets(self):
+        # Фрейм для статуса планировщика
+        scheduler_frame = ttk.LabelFrame(self.root, text="Статус планировщика", padding=10)
+        scheduler_frame.pack(fill="x", padx=10, pady=5)
+        
+        self.scheduler_status = ttk.Label(scheduler_frame, text="Планировщик: Активен")
+        self.scheduler_status.pack(fill="x", pady=5)
+        
+        # Фрейм для статуса мониторинга строк
         lines_frame = ttk.LabelFrame(self.root, text="Мониторинг строк", padding=10)
         lines_frame.pack(fill="x", padx=10, pady=5)
         
         self.lines_status = ttk.Label(lines_frame, text="Состояние: Остановлен")
         self.lines_status.pack(fill="x", pady=5)
+        
+        self.lines_scheduler_status = ttk.Label(lines_frame, text="Планировщик: Ожидание")
+        self.lines_scheduler_status.pack(fill="x", pady=5)
         
         lines_buttons = ttk.Frame(lines_frame)
         lines_buttons.pack(fill="x", pady=5)
@@ -38,11 +49,15 @@ class MonitoringUI:
         )
         self.stop_lines_button.pack(side="left", padx=5)
         
+        # Фрейм для статуса RBK и MIR24
         rbk_mir24_frame = ttk.LabelFrame(self.root, text="RBK и MIR24", padding=10)
         rbk_mir24_frame.pack(fill="x", padx=10, pady=5)
         
         self.rbk_mir24_status = ttk.Label(rbk_mir24_frame, text="Состояние: Остановлен")
         self.rbk_mir24_status.pack(fill="x", pady=5)
+        
+        self.rbk_mir24_scheduler_status = ttk.Label(rbk_mir24_frame, text="Планировщик: Ожидание")
+        self.rbk_mir24_scheduler_status.pack(fill="x", pady=5)
         
         rbk_mir24_buttons = ttk.Frame(rbk_mir24_frame)
         rbk_mir24_buttons.pack(fill="x", pady=5)
@@ -61,6 +76,13 @@ class MonitoringUI:
             state="disabled"
         )
         self.stop_rbk_mir24_button.pack(side="left", padx=5)
+        
+        # Фрейм для статуса обработки файлов
+        processing_frame = ttk.LabelFrame(self.root, text="Обработка файлов", padding=10)
+        processing_frame.pack(fill="x", padx=10, pady=5)
+        
+        self.processing_status = ttk.Label(processing_frame, text="Статус обработки: Ожидание")
+        self.processing_status.pack(fill="x", pady=5)
         
         # Создаем фрейм для кнопок сохранения и отправки
         save_buttons_frame = ttk.Frame(self.root)
@@ -92,18 +114,26 @@ class MonitoringUI:
             self.start_lines_button.config(state="normal")
             self.stop_lines_button.config(state="disabled")
             
+    def update_lines_scheduler_status(self, status):
+        self.lines_scheduler_status.config(text=f"Планировщик: {status}")
+            
     def update_rbk_mir24_status(self, status):
         self.rbk_mir24_status.config(text=f"Состояние: {status}")
         if status == "Запущен":
             self.start_rbk_mir24_button.config(state="disabled")
             self.stop_rbk_mir24_button.config(state="normal")
-            self.status_label.config(text="Запись RBK и MIR24 запущена")
-        elif status == "Остановлен":
+        else:
             self.start_rbk_mir24_button.config(state="normal")
             self.stop_rbk_mir24_button.config(state="disabled")
-            self.status_label.config(text="Запись RBK и MIR24 остановлена")
-        else:
-            self.status_label.config(text=status)
+            
+    def update_rbk_mir24_scheduler_status(self, status):
+        self.rbk_mir24_scheduler_status.config(text=f"Планировщик: {status}")
+            
+    def update_processing_status(self, status):
+        self.processing_status.config(text=f"Статус обработки: {status}")
+            
+    def update_scheduler_status(self, status):
+        self.scheduler_status.config(text=f"Планировщик: {status}")
             
     def update_status(self, message):
         self.status_label.config(text=message)
