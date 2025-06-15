@@ -175,10 +175,10 @@ async def record_video(channel_name, channel_info, process_list):
     except Exception as e:
         logger.error(f"Ошибка при записи {channel_name}: {e}")
 
-async def process_rbk_mir24(app, ui, send_files=False):
-    logger.info("Запуск записи видеопотоков РБК и МИР24")
+async def process_rbk_mir24(app, ui, send_files=False, channels=None):
+    logger.info("Запуск записи видеопотоков")
     if ui.root.winfo_exists():
-        ui.update_status("Запуск записи РБК и МИР24...")
+        ui.update_status("Запуск записи...")
         ui.update_rbk_mir24_status("Запущен")
 
     process_list = app.process_list
@@ -193,7 +193,22 @@ async def process_rbk_mir24(app, ui, send_files=False):
                 ui.update_rbk_mir24_status("Ошибка")
             return
 
-        channels = ["RBK", "MIR24"]
+        # Список каналов для видео
+        video_channels = ['RBK', 'MIR24', 'RenTV', 'NTV', 'TVC']
+
+        # Если каналы не указаны, используем все каналы для видео
+        if channels is None:
+            channels = video_channels
+        else:
+            # Фильтруем только каналы для видео
+            channels = [ch for ch in channels if ch in video_channels]
+            if not channels:
+                logger.warning("Нет каналов для записи видео")
+                if ui.root.winfo_exists():
+                    ui.update_status("Нет каналов для записи видео")
+                    ui.update_rbk_mir24_status("Ошибка")
+                return
+        
         for name in channels:
             if name in channels_data:
                 logger.info(f"Создание задачи для {name}")
@@ -212,9 +227,9 @@ async def process_rbk_mir24(app, ui, send_files=False):
                 logger.error(f"Задача записи завершилась с ошибкой: {task.exception()}")
 
         if ui.root.winfo_exists():
-            ui.update_status("Запись РБК и МИР24 завершена")
+            ui.update_status("Запись завершена")
             ui.update_rbk_mir24_status("Остановлен")
-        logger.info("Запись видеопотоков РБК и МИР24 завершена")
+        logger.info("Запись видеопотоков завершена")
 
     except asyncio.CancelledError:
         logger.info("Отмена всех задач записи")
@@ -228,7 +243,7 @@ async def process_rbk_mir24(app, ui, send_files=False):
 
         process_list.clear()
         if ui.root.winfo_exists():
-            ui.update_status("Запись РБК и МИР24 остановлена")
+            ui.update_status("Запись остановлена")
             ui.update_rbk_mir24_status("Остановлен")
         raise
 

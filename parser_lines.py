@@ -186,8 +186,18 @@ def main():
             logger.error("Не удалось загрузить конфигурацию каналов")
             return
 
-        # Запускаем мониторинг для каждого канала
+        # Список каналов для скриншотов
+        screenshot_channels = [
+            'R24_blue_line', 'R24_white_line', 'M24', '360', 
+            'Izvestiya', 'R1', 'Zvezda'
+        ]
+
+        # Запускаем мониторинг только для каналов скриншотов
         for channel_name, channel_info in channels.items():
+            if channel_name not in screenshot_channels:
+                logger.info(f"Пропуск канала {channel_name} (не в списке каналов для скриншотов)")
+                continue
+
             # Проверяем наличие URL
             if not channel_info.get('url'):
                 logger.error(f"Пропуск канала {channel_name}: не указан URL потока")

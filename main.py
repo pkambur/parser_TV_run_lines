@@ -5,7 +5,9 @@ import tkinter as tk
 from tkinter import ttk, messagebox
 import os
 import csv
-from datetime import datetime
+from datetime import datetime, time
+import schedule
+import time as time_module
 
 from UI import MonitoringUI
 from rbk_mir24_parser import process_rbk_mir24, stop_rbk_mir24
@@ -23,6 +25,8 @@ class MonitoringApp:
         self.loop = None
         self.thread = None
         self.running = False
+        self.scheduler_thread = None
+        self.scheduler_running = False
 
         self.rbk_mir24_task = None
         self.rbk_mir24_running = False
@@ -45,6 +49,166 @@ class MonitoringApp:
         # Создаем и запускаем UI
         self.ui = MonitoringUI(self)
         
+        # Запускаем планировщик
+        self.start_scheduler()
+
+    def start_scheduler(self):
+        """Запуск планировщика задач."""
+        if not self.scheduler_running:
+            self.scheduler_running = True
+            self.scheduler_thread = threading.Thread(
+                target=self._run_scheduler,
+                daemon=True
+            )
+            self.scheduler_thread.start()
+            logger.info("Планировщик задач запущен")
+
+    def _run_scheduler(self):
+        """Выполнение планировщика задач."""
+        logger.info("Настройка расписания задач...")
+        
+        # Настройка расписания для R1
+        for hour in range(5, 10):
+            for minute in [0, 30]:
+                time_str = f"{hour:02d}:{minute:02d}"
+                schedule.every().day.at(time_str).do(self._start_r1_monitoring)
+                logger.info(f"Добавлено расписание для R1: {time_str}")
+
+        # Настройка расписания для Zvezda
+        for time_str in ["09:00", "13:00", "17:00", "19:00"]:
+            schedule.every().day.at(time_str).do(self._start_zvezda_monitoring)
+            logger.info(f"Добавлено расписание для Zvezda: {time_str}")
+
+        # Настройка расписания для остальных каналов
+        schedule.every(20).minutes.do(self._start_other_channels_monitoring)
+        logger.info("Добавлено расписание для остальных каналов: каждые 20 минут")
+
+        # Настройка расписания для RBK и MIR24
+        schedule.every(20).minutes.do(self._start_rbk_mir24_monitoring)
+        logger.info("Добавлено расписание для RBK и MIR24: каждые 20 минут")
+
+        # Настройка расписания для RenTV
+        for time_str in ["08:30", "12:30", "16:30", "19:30", "23:00"]:
+            schedule.every().day.at(time_str).do(self._start_rentv_monitoring)
+            logger.info(f"Добавлено расписание для RenTV: {time_str}")
+
+        # Настройка расписания для NTV
+        for time_str in ["08:00", "10:00", "13:00", "16:00", "19:00"]:
+            schedule.every().day.at(time_str).do(self._start_ntv_monitoring)
+            logger.info(f"Добавлено расписание для NTV: {time_str}")
+
+        # Настройка расписания для TVC
+        for time_str in ["11:30", "14:30", "17:50", "22:00"]:
+            schedule.every().day.at(time_str).do(self._start_tvc_monitoring)
+            logger.info(f"Добавлено расписание для TVC: {time_str}")
+
+        logger.info("Расписание настроено, начинаем выполнение...")
+        while self.scheduler_running:
+            try:
+                schedule.run_pending()
+                time_module.sleep(1)
+            except Exception as e:
+                logger.error(f"Ошибка в планировщике: {e}")
+
+    def _start_r1_monitoring(self):
+        """Запуск мониторинга для R1."""
+        logger.info("Попытка запуска мониторинга R1...")
+        if not self.lines_monitoring_running:
+            try:
+                self.lines_monitoring_running = True
+                start_force_capture()
+                self.lines_monitoring_thread = threading.Thread(
+                    target=start_lines_monitoring,
+                    daemon=True
+                )
+                self.lines_monitoring_thread.start()
+                logger.info("Запущен мониторинг R1 по расписанию")
+                # Останавливаем через 30 минут
+                threading.Timer(1800, self.stop_lines_monitoring).start()
+            except Exception as e:
+                logger.error(f"Ошибка при запуске мониторинга R1: {e}")
+                self.lines_monitoring_running = False
+        else:
+            logger.warning("Мониторинг уже запущен, пропускаем запуск R1")
+
+    def _start_zvezda_monitoring(self):
+        """Запуск мониторинга для Zvezda."""
+        logger.info("Попытка запуска мониторинга Zvezda...")
+        if not self.lines_monitoring_running:
+            try:
+                self.lines_monitoring_running = True
+                start_force_capture()
+                self.lines_monitoring_thread = threading.Thread(
+                    target=start_lines_monitoring,
+                    daemon=True
+                )
+                self.lines_monitoring_thread.start()
+                logger.info("Запущен мониторинг Zvezda по расписанию")
+                # Останавливаем через 10 минут
+                threading.Timer(600, self.stop_lines_monitoring).start()
+            except Exception as e:
+                logger.error(f"Ошибка при запуске мониторинга Zvezda: {e}")
+                self.lines_monitoring_running = False
+        else:
+            logger.warning("Мониторинг уже запущен, пропускаем запуск Zvezda")
+
+    def _start_other_channels_monitoring(self):
+        """Запуск мониторинга для остальных каналов."""
+        logger.info("Попытка запуска мониторинга остальных каналов...")
+        if not self.lines_monitoring_running:
+            try:
+                self.lines_monitoring_running = True
+                start_force_capture()
+                self.lines_monitoring_thread = threading.Thread(
+                    target=start_lines_monitoring,
+                    daemon=True
+                )
+                self.lines_monitoring_thread.start()
+                logger.info("Запущен мониторинг остальных каналов по расписанию")
+                # Останавливаем через 20 минут
+                threading.Timer(1200, self.stop_lines_monitoring).start()
+            except Exception as e:
+                logger.error(f"Ошибка при запуске мониторинга остальных каналов: {e}")
+                self.lines_monitoring_running = False
+        else:
+            logger.warning("Мониторинг уже запущен, пропускаем запуск остальных каналов")
+
+    def start_lines_monitoring(self):
+        """Запуск мониторинга строк по кнопке."""
+        logger.info("Попытка запуска мониторинга по кнопке...")
+        if not self.lines_monitoring_running:
+            try:
+                self.lines_monitoring_running = True
+                start_force_capture()
+                self.lines_monitoring_thread = threading.Thread(
+                    target=start_lines_monitoring,
+                    daemon=True
+                )
+                self.lines_monitoring_thread.start()
+                self.ui.update_lines_status("Запущен")
+                logger.info("Запущен мониторинг строк по кнопке")
+            except Exception as e:
+                logger.error(f"Ошибка при запуске мониторинга по кнопке: {e}")
+                self.lines_monitoring_running = False
+                messagebox.showerror("Ошибка", f"Не удалось запустить мониторинг: {e}")
+        else:
+            logger.warning("Мониторинг уже запущен")
+            messagebox.showwarning("Предупреждение", "Мониторинг строк уже запущен")
+
+    def stop_lines_monitoring(self):
+        """Остановка мониторинга строк."""
+        if self.lines_monitoring_running:
+            self.lines_monitoring_running = False
+            stop_force_capture()
+            stop_subprocesses()
+            if self.lines_monitoring_thread and self.lines_monitoring_thread.is_alive():
+                self.lines_monitoring_thread.join(timeout=5.0)
+            self.lines_monitoring_thread = None
+            self.ui.update_lines_status("Остановлен")
+            logger.info("Остановлен мониторинг строк")
+        else:
+            messagebox.showwarning("Предупреждение", "Мониторинг строк уже остановлен")
+
     def start_rbk_mir24(self):
         """Запуск мониторинга RBK и MIR24."""
         if not self.rbk_mir24_running and self.loop is not None:
@@ -91,35 +255,6 @@ class MonitoringApp:
                 messagebox.showerror("Ошибка", f"Не удалось остановить запись: {str(e)}")
         else:
             messagebox.showwarning("Предупреждение", "Мониторинг RBK и MIR24 уже остановлен или event loop не инициализирован")
-
-    def start_lines_monitoring(self):
-        """Запуск мониторинга строк."""
-        if not self.lines_monitoring_running:
-            self.lines_monitoring_running = True
-            start_force_capture()
-            self.lines_monitoring_thread = threading.Thread(
-                target=start_lines_monitoring,
-                daemon=True
-            )
-            self.lines_monitoring_thread.start()
-            self.ui.update_lines_status("Запущен")
-            logger.info("Запущен мониторинг строк")
-        else:
-            messagebox.showwarning("Предупреждение", "Мониторинг строк уже запущен")
-
-    def stop_lines_monitoring(self):
-        """Остановка мониторинга строк."""
-        if self.lines_monitoring_running:
-            self.lines_monitoring_running = False
-            stop_force_capture()
-            stop_subprocesses()
-            if self.lines_monitoring_thread and self.lines_monitoring_thread.is_alive():
-                self.lines_monitoring_thread.join(timeout=5.0)
-            self.lines_monitoring_thread = None
-            self.ui.update_lines_status("Остановлен")
-            logger.info("Остановлен мониторинг строк")
-        else:
-            messagebox.showwarning("Предупреждение", "Мониторинг строк уже остановлен")
 
     def start_save_to_csv(self):
         """Запуск сохранения строк в CSV."""
@@ -218,9 +353,114 @@ class MonitoringApp:
             self.ui.update_status("Ошибка при отправке в Telegram")
             messagebox.showerror("Ошибка", f"Не удалось отправить файлы в Telegram: {e}")
 
+    def _start_rbk_mir24_monitoring(self):
+        """Запуск мониторинга RBK и MIR24."""
+        logger.info("Попытка запуска мониторинга RBK и MIR24...")
+        if not self.rbk_mir24_running:
+            try:
+                self.rbk_mir24_running = True
+                self.process_list.clear()
+                self.ui.update_status("Запуск записи RBK и MIR24...")
+                
+                # Запускаем запись
+                self.rbk_mir24_task = asyncio.run_coroutine_threadsafe(
+                    process_rbk_mir24(self, self.ui, True),
+                    self.loop
+                )
+                
+                self.ui.update_rbk_mir24_status("Запущен")
+                logger.info("Запущен мониторинг RBK и MIR24 по расписанию")
+                # Останавливаем через 20 минут
+                threading.Timer(1200, self.stop_rbk_mir24).start()
+            except Exception as e:
+                logger.error(f"Ошибка при запуске мониторинга RBK и MIR24: {e}")
+                self.rbk_mir24_running = False
+        else:
+            logger.warning("Мониторинг RBK и MIR24 уже запущен")
+
+    def _start_rentv_monitoring(self):
+        """Запуск мониторинга RenTV."""
+        logger.info("Попытка запуска мониторинга RenTV...")
+        if not self.rbk_mir24_running:
+            try:
+                self.rbk_mir24_running = True
+                self.process_list.clear()
+                self.ui.update_status("Запуск записи RenTV...")
+                
+                # Запускаем запись
+                self.rbk_mir24_task = asyncio.run_coroutine_threadsafe(
+                    process_rbk_mir24(self, self.ui, True, channels=['RenTV']),
+                    self.loop
+                )
+                
+                self.ui.update_rbk_mir24_status("Запущен")
+                logger.info("Запущен мониторинг RenTV по расписанию")
+                # Останавливаем через 10 минут
+                threading.Timer(600, self.stop_rbk_mir24).start()
+            except Exception as e:
+                logger.error(f"Ошибка при запуске мониторинга RenTV: {e}")
+                self.rbk_mir24_running = False
+        else:
+            logger.warning("Мониторинг уже запущен, пропускаем запуск RenTV")
+
+    def _start_ntv_monitoring(self):
+        """Запуск мониторинга NTV."""
+        logger.info("Попытка запуска мониторинга NTV...")
+        if not self.rbk_mir24_running:
+            try:
+                self.rbk_mir24_running = True
+                self.process_list.clear()
+                self.ui.update_status("Запуск записи NTV...")
+                
+                # Запускаем запись
+                self.rbk_mir24_task = asyncio.run_coroutine_threadsafe(
+                    process_rbk_mir24(self, self.ui, True, channels=['NTV']),
+                    self.loop
+                )
+                
+                self.ui.update_rbk_mir24_status("Запущен")
+                logger.info("Запущен мониторинг NTV по расписанию")
+                # Останавливаем через 10 минут
+                threading.Timer(600, self.stop_rbk_mir24).start()
+            except Exception as e:
+                logger.error(f"Ошибка при запуске мониторинга NTV: {e}")
+                self.rbk_mir24_running = False
+        else:
+            logger.warning("Мониторинг уже запущен, пропускаем запуск NTV")
+
+    def _start_tvc_monitoring(self):
+        """Запуск мониторинга TVC."""
+        logger.info("Попытка запуска мониторинга TVC...")
+        if not self.rbk_mir24_running:
+            try:
+                self.rbk_mir24_running = True
+                self.process_list.clear()
+                self.ui.update_status("Запуск записи TVC...")
+                
+                # Запускаем запись
+                self.rbk_mir24_task = asyncio.run_coroutine_threadsafe(
+                    process_rbk_mir24(self, self.ui, True, channels=['TVC']),
+                    self.loop
+                )
+                
+                self.ui.update_rbk_mir24_status("Запущен")
+                logger.info("Запущен мониторинг TVC по расписанию")
+                # Останавливаем через 10 минут
+                threading.Timer(600, self.stop_rbk_mir24).start()
+            except Exception as e:
+                logger.error(f"Ошибка при запуске мониторинга TVC: {e}")
+                self.rbk_mir24_running = False
+        else:
+            logger.warning("Мониторинг уже запущен, пропускаем запуск TVC")
+
     def cleanup(self):
         """Очистка ресурсов при закрытии приложения."""
         try:
+            # Останавливаем планировщик
+            self.scheduler_running = False
+            if self.scheduler_thread and self.scheduler_thread.is_alive():
+                self.scheduler_thread.join(timeout=5.0)
+            
             # Сначала закрываем UI
             logger.info("Закрытие UI")
             self.ui.cleanup()
