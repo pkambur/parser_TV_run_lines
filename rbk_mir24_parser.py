@@ -8,7 +8,7 @@ from datetime import datetime
 
 logger = logging.getLogger(__name__)
 base_dir = os.path.abspath("video")  # Абсолютный путь для надежности
-VIDEO_DURATION = 20  # Для тестов 20 секунд, для продакшена можно увеличить до 240
+VIDEO_DURATION = 120  # Для тестов 20 секунд, для продакшена можно увеличить до 240
 
 def load_channels():
     try:
