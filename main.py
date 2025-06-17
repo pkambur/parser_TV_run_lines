@@ -132,7 +132,17 @@ class MonitoringApp:
                 self.lines_monitoring_thread.start()
                 logger.info("Запущен мониторинг R1 по расписанию")
                 self.ui.update_lines_scheduler_status("R1 активен")
-                # Останавливаем через 30 минут и обрабатываем скриншоты
+                
+                # Запускаем периодическую проверку новых файлов
+                def check_files():
+                    while self.lines_monitoring_running:
+                        self._check_and_send_new_files()
+                        time_module.sleep(30)  # Проверяем каждые 30 секунд
+                
+                self.check_files_thread = threading.Thread(target=check_files, daemon=True)
+                self.check_files_thread.start()
+                
+                # Останавливаем через 30 минут
                 threading.Timer(1800, self._process_and_send_screenshots).start()
             except Exception as e:
                 logger.error(f"Ошибка при запуске мониторинга R1: {e}")
@@ -157,7 +167,17 @@ class MonitoringApp:
                 self.lines_monitoring_thread.start()
                 logger.info("Запущен мониторинг Zvezda по расписанию")
                 self.ui.update_lines_scheduler_status("Zvezda активен")
-                # Останавливаем через 10 минут и обрабатываем скриншоты
+                
+                # Запускаем периодическую проверку новых файлов
+                def check_files():
+                    while self.lines_monitoring_running:
+                        self._check_and_send_new_files()
+                        time_module.sleep(30)  # Проверяем каждые 30 секунд
+                
+                self.check_files_thread = threading.Thread(target=check_files, daemon=True)
+                self.check_files_thread.start()
+                
+                # Останавливаем через 10 минут
                 threading.Timer(600, self._process_and_send_screenshots).start()
             except Exception as e:
                 logger.error(f"Ошибка при запуске мониторинга Zvezda: {e}")
@@ -182,7 +202,17 @@ class MonitoringApp:
                 self.lines_monitoring_thread.start()
                 logger.info("Запущен мониторинг остальных каналов по расписанию")
                 self.ui.update_lines_scheduler_status("Другие каналы активны")
-                # Останавливаем через 20 минут и обрабатываем скриншоты
+                
+                # Запускаем периодическую проверку новых файлов
+                def check_files():
+                    while self.lines_monitoring_running:
+                        self._check_and_send_new_files()
+                        time_module.sleep(30)  # Проверяем каждые 30 секунд
+                
+                self.check_files_thread = threading.Thread(target=check_files, daemon=True)
+                self.check_files_thread.start()
+                
+                # Останавливаем через 20 минут
                 threading.Timer(1200, self._process_and_send_screenshots).start()
             except Exception as e:
                 logger.error(f"Ошибка при запуске мониторинга остальных каналов: {e}")
@@ -222,6 +252,8 @@ class MonitoringApp:
             stop_subprocesses()
             if self.lines_monitoring_thread and self.lines_monitoring_thread.is_alive():
                 self.lines_monitoring_thread.join(timeout=5.0)
+            if hasattr(self, 'check_files_thread') and self.check_files_thread.is_alive():
+                self.check_files_thread.join(timeout=5.0)
             self.lines_monitoring_thread = None
             self.ui.update_lines_status("Остановлен")
             logger.info("Остановлен мониторинг строк")
@@ -592,6 +624,45 @@ class MonitoringApp:
         except Exception as e:
             logger.error(f"Ошибка при отправке ежедневного файла в Telegram: {e}")
             self.ui.update_status(f"Ошибка отправки ежедневного файла: {str(e)}")
+
+    def _check_and_send_new_files(self):
+        """Проверка и отправка новых файлов в Telegram."""
+        try:
+            processed_dir = "screenshots_processed"
+            if not os.path.exists(processed_dir):
+                return
+
+            # Получаем список файлов из директории screenshots_processed
+            screenshot_files = []
+            for file in os.listdir(processed_dir):
+                if file.endswith(('.jpg', '.jpeg', '.png')):
+                    screenshot_files.append([file])
+
+            if screenshot_files:
+                # Находим последний Excel файл в папке logs
+                logs_dir = "logs"
+                excel_files = [f for f in os.listdir(logs_dir) if f.endswith('.xlsx')]
+                if excel_files:
+                    # Сортируем файлы по времени создания и берем последний
+                    latest_excel = max(excel_files, key=lambda x: os.path.getctime(os.path.join(logs_dir, x)))
+                    excel_path = os.path.join(logs_dir, latest_excel)
+
+                    # Отправляем скриншоты и Excel в Telegram
+                    self.ui.update_processing_status("Отправка новых скриншотов и Excel...")
+                    from telegram_sender import send_files
+                    
+                    # Создаем новый event loop для отправки
+                    loop = asyncio.new_event_loop()
+                    asyncio.set_event_loop(loop)
+                    try:
+                        loop.run_until_complete(send_files(excel_path, screenshot_files))
+                        self.ui.update_processing_status("Новые скриншоты и Excel отправлены")
+                    finally:
+                        loop.close()
+
+        except Exception as e:
+            logger.error(f"Ошибка при проверке и отправке новых файлов: {e}")
+            self.ui.update_processing_status(f"Ошибка: {str(e)}")
 
     def cleanup(self):
         """Очистка ресурсов при закрытии приложения."""
