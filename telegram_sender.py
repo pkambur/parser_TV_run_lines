@@ -6,6 +6,7 @@ from telegram.constants import ParseMode
 from PIL import Image
 import io
 import shutil
+import pandas as pd
 
 # Настройка логирования
 os.makedirs("logs", exist_ok=True)
@@ -55,6 +56,13 @@ def process_image(image_path):
             # Получаем текущие размеры
             width, height = img.size
             
+            # Проверяем минимальные размеры (Telegram требует минимум 10x10)
+            if width < 10 or height < 10:
+                # Увеличиваем до минимального размера
+                new_width = max(width, 10)
+                new_height = max(height, 10)
+                img = img.resize((new_width, new_height), Image.Resampling.LANCZOS)
+            
             # Если изображение слишком большое, уменьшаем его
             if width > MAX_WIDTH or height > MAX_HEIGHT:
                 # Вычисляем новые размеры с сохранением пропорций
@@ -95,107 +103,86 @@ async def send_to_telegram(excel_file, screenshot_files):
             logger.error("No available chats found")
             raise Exception("No available chats found")
 
-        # Send Excel file
+        # Send Excel file and recognized text
         if os.path.exists(excel_file):
-            with open(excel_file, 'rb') as f:
-                for chat_id in available_chats:
-                    try:
-                        await bot.send_document(
-                            chat_id=chat_id,
-                            document=f,
-                            caption=f"Running strings report {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}",
-                            parse_mode=ParseMode.HTML
-                        )
-                        logger.info(f"Sent Excel file {excel_file} to Telegram chat {chat_id}")
-                    except Exception as e:
-                        logger.error(f"Error sending Excel to chat {chat_id}: {e}")
+            try:
+                # Читаем Excel файл
+                df = pd.read_excel(excel_file)
+                
+                # Формируем сообщение с распознанными строками
+                if not df.empty:
+                    message = "Распознанные строки:\n\n"
+                    for _, row in df.iterrows():
+                        message += f"Канал: {row['Channel']}\n"
+                        message += f"Время: {row['Timestamp']}\n"
+                        message += f"Текст: {row['Text']}\n"
+                        message += "-------------------\n"
+                    
+                    # Отправляем текст
+                    for chat_id in available_chats:
+                        try:
+                            # Разбиваем сообщение на части, если оно слишком длинное
+                            max_length = 4000  # Максимальная длина сообщения в Telegram
+                            for i in range(0, len(message), max_length):
+                                chunk = message[i:i + max_length]
+                                await bot.send_message(
+                                    chat_id=chat_id,
+                                    text=chunk,
+                                    parse_mode=ParseMode.HTML
+                                )
+                            logger.info(f"Sent recognized text to Telegram chat {chat_id}")
+                        except Exception as e:
+                            logger.error(f"Error sending text to chat {chat_id}: {e}")
+                
+                # Отправляем Excel файл
+                with open(excel_file, 'rb') as f:
+                    for chat_id in available_chats:
+                        try:
+                            await bot.send_document(
+                                chat_id=chat_id,
+                                document=f,
+                                caption=f"Running strings report {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}",
+                                parse_mode=ParseMode.HTML
+                            )
+                            logger.info(f"Sent Excel file {excel_file} to Telegram chat {chat_id}")
+                        except Exception as e:
+                            logger.error(f"Error sending Excel to chat {chat_id}: {e}")
                 sent_files.append(excel_file)
+
+                # Отправляем скриншоты как документы
+                if screenshot_files:
+                    logger.info(f"Found {len(screenshot_files)} screenshot files to send")
+                    for screenshots in screenshot_files:
+                        for screenshot in screenshots:
+                            screenshot_path = os.path.join(processed_dir, screenshot)
+                            if os.path.exists(screenshot_path):
+                                try:
+                                    # Отправляем скриншот как документ
+                                    with open(screenshot_path, 'rb') as f:
+                                        for chat_id in available_chats:
+                                            try:
+                                                await bot.send_document(
+                                                    chat_id=chat_id,
+                                                    document=f,
+                                                    caption=f"Screenshot: {screenshot}",
+                                                    parse_mode=ParseMode.HTML
+                                                )
+                                                logger.info(f"Sent screenshot {screenshot} to Telegram chat {chat_id}")
+                                            except Exception as e:
+                                                logger.error(f"Error sending screenshot to chat {chat_id}: {e}")
+                                    sent_files.append(screenshot_path)
+                                except Exception as e:
+                                    logger.error(f"Error sending screenshot {screenshot}: {e}")
+                            else:
+                                logger.warning(f"Screenshot {screenshot} not found at {screenshot_path}")
+                else:
+                    logger.info("No screenshots to send")
+
+            except Exception as e:
+                logger.error(f"Error processing Excel file: {e}")
         else:
             logger.warning(f"Excel file not found: {excel_file}")
             raise FileNotFoundError(f"Excel file not found: {excel_file}")
-
-        # Send screenshots
-        if screenshot_files:
-            for screenshots in screenshot_files:
-                for screenshot in screenshots:
-                    screenshot_path = os.path.join(processed_dir, screenshot)
-                    if os.path.exists(screenshot_path):
-                        try:
-                            # Проверяем тип файла
-                            if screenshot.lower().endswith(('.mp4', '.avi', '.mkv')):
-                                # Отправляем видео
-                                with open(screenshot_path, 'rb') as f:
-                                    for chat_id in available_chats:
-                                        try:
-                                            await bot.send_video(
-                                                chat_id=chat_id,
-                                                video=f,
-                                                caption=f"Video: {screenshot}",
-                                                parse_mode=ParseMode.HTML,
-                                                supports_streaming=True
-                                            )
-                                            logger.info(f"Sent video {screenshot} to Telegram chat {chat_id}")
-                                        except Exception as e:
-                                            logger.error(f"Error sending video to chat {chat_id}: {e}")
-                            elif screenshot.lower().endswith(('.jpg', '.jpeg', '.png')):
-                                # Отправляем фото
-                                with open(screenshot_path, 'rb') as f:
-                                    for chat_id in available_chats:
-                                        try:
-                                            await bot.send_photo(
-                                                chat_id=chat_id,
-                                                photo=f,
-                                                caption=f"Screenshot: {screenshot}",
-                                                parse_mode=ParseMode.HTML
-                                            )
-                                            logger.info(f"Sent photo {screenshot} to Telegram chat {chat_id}")
-                                        except Exception as e:
-                                            logger.error(f"Error sending photo to chat {chat_id}: {e}")
-                            else:
-                                # Отправляем как документ для остальных типов файлов
-                                with open(screenshot_path, 'rb') as f:
-                                    for chat_id in available_chats:
-                                        try:
-                                            await bot.send_document(
-                                                chat_id=chat_id,
-                                                document=f,
-                                                caption=f"File: {screenshot}",
-                                                parse_mode=ParseMode.HTML
-                                            )
-                                            logger.info(f"Sent file {screenshot} to Telegram chat {chat_id}")
-                                        except Exception as e:
-                                            logger.error(f"Error sending file to chat {chat_id}: {e}")
-                            sent_files.append(screenshot_path)
-                        except Exception as e:
-                            logger.error(f"Error sending screenshot {screenshot}: {e}")
-                    else:
-                        logger.warning(f"Screenshot {screenshot} not found at {screenshot_path}")
-        else:
-            logger.info("No screenshots to send")
-
-        # Send video files
-        video_files = get_video_files()
-        if video_files:
-            for video_path in video_files:
-                try:
-                    with open(video_path, 'rb') as f:
-                        for chat_id in available_chats:
-                            try:
-                                await bot.send_video(
-                                    chat_id=chat_id,
-                                    video=f,
-                                    caption=f"Video: {os.path.basename(video_path)}",
-                                    parse_mode=ParseMode.HTML,
-                                    supports_streaming=True
-                                )
-                                logger.info(f"Sent video {video_path} to Telegram chat {chat_id}")
-                            except Exception as e:
-                                logger.error(f"Error sending video to chat {chat_id}: {e}")
-                    sent_files.append(video_path)
-                except Exception as e:
-                    logger.error(f"Error sending video {video_path}: {e}")
-        else:
-            logger.info("No videos to send")
 
         # Удаляем отправленные файлы
         for file_path in sent_files:
@@ -238,6 +225,12 @@ def send_files(excel_file, screenshot_files):
         logger.error(f"Failed to send files: {e}")
         raise
     finally:
+        # Закрываем все задачи перед закрытием цикла
+        pending = asyncio.all_tasks(loop)
+        for task in pending:
+            task.cancel()
+        # Даем время на завершение задач
+        loop.run_until_complete(asyncio.gather(*pending, return_exceptions=True))
         loop.close()
 
 async def send_video_files():
@@ -326,6 +319,12 @@ def send_video_files_sync():
         logger.error(f"Failed to send video files: {e}")
         raise
     finally:
+        # Закрываем все задачи перед закрытием цикла
+        pending = asyncio.all_tasks(loop)
+        for task in pending:
+            task.cancel()
+        # Даем время на завершение задач
+        loop.run_until_complete(asyncio.gather(*pending, return_exceptions=True))
         loop.close()
 
 if __name__ == "__main__":

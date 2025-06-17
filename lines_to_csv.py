@@ -421,6 +421,9 @@ async def process_screenshots(base_dir="screenshots"):
         # Список папок, которые нужно исключить
         excluded_folders = ["RBK", "MIR24", "TVC", "NTV"]
         
+        # Даем небольшую паузу для завершения записи файлов
+        await asyncio.sleep(2)
+        
         for channel_name in os.listdir(base_dir):
             if channel_name in excluded_folders:
                 logger.info(f"Пропуск папки {channel_name} (исключена из обработки)")

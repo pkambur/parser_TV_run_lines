@@ -55,8 +55,8 @@
         "crop": "crop=604:30:150:450"
     },
     "M24": {
-        "url": "https://rec102.24h.tv/hlsjwt/70340faef9e517c39391e9ad4bb3a3e905363fe2-163-0-24h320310250-1-2956670857-1749986235-e128-HtLVyRB8E6q-vOS_OwwdsLXZh_7UfkCmW88f4-3DNoA/index.m3u8?ml=true&mp4=true",
+        "url": "https://region-m.livecdn.ivi.ru/jW1KPWLf4P8dgbuUUv4J1A0W7WOr2Qh5hTvRVJGYWdhQ9gilgLGk83109/QoPZ-1AqZpKnSRAvB3Atmg,1750196312/noargs/Moscow24/480p.m3u8",
         "interval": "1/10",
-        "crop": "crop=555:56:165:520"
+        "crop": "crop=515:56:200:520"
     }
 }

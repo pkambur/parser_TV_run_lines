@@ -278,7 +278,31 @@ class MonitoringApp:
     def start_save_to_csv(self):
         """Запуск сохранения строк в CSV."""
         try:
-            self.ui.update_status("Сохранение строк в CSV...")
+            self.ui.update_status("Сохранение строк...")
+            
+            # Останавливаем текущий мониторинг, если он запущен
+            if self.lines_monitoring_running:
+                self.stop_lines_monitoring()
+                # Даем время на корректное завершение предыдущего мониторинга
+                time_module.sleep(2)
+            
+            # Запускаем принудительный захват
+            start_force_capture()
+            
+            # Запускаем мониторинг в отдельном потоке
+            self.lines_monitoring_running = True
+            self.lines_monitoring_thread = threading.Thread(
+                target=start_lines_monitoring,
+                daemon=True
+            )
+            self.lines_monitoring_thread.start()
+            
+            # Ждем 30 секунд для сбора данных
+            time_module.sleep(30)
+            
+            # Останавливаем мониторинг
+            self.stop_lines_monitoring()
+            
             # Запускаем процесс сохранения в отдельном потоке
             thread = threading.Thread(
                 target=self._save_to_csv_task,
@@ -356,9 +380,10 @@ class MonitoringApp:
 
             # Получаем список файлов из директории screenshots_processed
             screenshot_files = []
-            for file in os.listdir(processed_dir):
-                if file.endswith(('.jpg', '.jpeg', '.png')):
-                    screenshot_files.append([file])
+            if os.path.exists(processed_dir):
+                for file in os.listdir(processed_dir):
+                    if file.endswith(('.jpg', '.jpeg', '.png')):
+                        screenshot_files.append([file])
 
             if screenshot_files:
                 # Находим последний Excel файл в папке logs
@@ -372,9 +397,16 @@ class MonitoringApp:
                     # Отправляем скриншоты и Excel в Telegram
                     self.ui.update_processing_status("Отправка скриншотов и Excel...")
                     from telegram_sender import send_files
-                    send_files(excel_path, screenshot_files)
-                    self.ui.update_processing_status("Скриншоты и Excel отправлены")
-                    files_sent = True
+                    
+                    # Создаем новый event loop для отправки
+                    loop = asyncio.new_event_loop()
+                    asyncio.set_event_loop(loop)
+                    try:
+                        loop.run_until_complete(send_files(excel_path, screenshot_files))
+                        self.ui.update_processing_status("Скриншоты и Excel отправлены")
+                        files_sent = True
+                    finally:
+                        loop.close()
                 else:
                     logger.info("Нет Excel файла для отправки")
             else:
