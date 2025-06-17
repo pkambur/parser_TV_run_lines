@@ -121,18 +121,50 @@ async def send_to_telegram(excel_file, screenshot_files):
                     screenshot_path = os.path.join(processed_dir, screenshot)
                     if os.path.exists(screenshot_path):
                         try:
-                            with open(screenshot_path, 'rb') as f:
-                                for chat_id in available_chats:
-                                    try:
-                                        await bot.send_document(
-                                            chat_id=chat_id,
-                                            document=f,
-                                            caption=f"Screenshot: {screenshot}",
-                                            parse_mode=ParseMode.HTML
-                                        )
-                                        logger.info(f"Sent screenshot {screenshot} to Telegram chat {chat_id}")
-                                    except Exception as e:
-                                        logger.error(f"Error sending screenshot to chat {chat_id}: {e}")
+                            # Проверяем тип файла
+                            if screenshot.lower().endswith(('.mp4', '.avi', '.mkv')):
+                                # Отправляем видео
+                                with open(screenshot_path, 'rb') as f:
+                                    for chat_id in available_chats:
+                                        try:
+                                            await bot.send_video(
+                                                chat_id=chat_id,
+                                                video=f,
+                                                caption=f"Video: {screenshot}",
+                                                parse_mode=ParseMode.HTML,
+                                                supports_streaming=True
+                                            )
+                                            logger.info(f"Sent video {screenshot} to Telegram chat {chat_id}")
+                                        except Exception as e:
+                                            logger.error(f"Error sending video to chat {chat_id}: {e}")
+                            elif screenshot.lower().endswith(('.jpg', '.jpeg', '.png')):
+                                # Отправляем фото
+                                with open(screenshot_path, 'rb') as f:
+                                    for chat_id in available_chats:
+                                        try:
+                                            await bot.send_photo(
+                                                chat_id=chat_id,
+                                                photo=f,
+                                                caption=f"Screenshot: {screenshot}",
+                                                parse_mode=ParseMode.HTML
+                                            )
+                                            logger.info(f"Sent photo {screenshot} to Telegram chat {chat_id}")
+                                        except Exception as e:
+                                            logger.error(f"Error sending photo to chat {chat_id}: {e}")
+                            else:
+                                # Отправляем как документ для остальных типов файлов
+                                with open(screenshot_path, 'rb') as f:
+                                    for chat_id in available_chats:
+                                        try:
+                                            await bot.send_document(
+                                                chat_id=chat_id,
+                                                document=f,
+                                                caption=f"File: {screenshot}",
+                                                parse_mode=ParseMode.HTML
+                                            )
+                                            logger.info(f"Sent file {screenshot} to Telegram chat {chat_id}")
+                                        except Exception as e:
+                                            logger.error(f"Error sending file to chat {chat_id}: {e}")
                             sent_files.append(screenshot_path)
                         except Exception as e:
                             logger.error(f"Error sending screenshot {screenshot}: {e}")
@@ -153,7 +185,8 @@ async def send_to_telegram(excel_file, screenshot_files):
                                     chat_id=chat_id,
                                     video=f,
                                     caption=f"Video: {os.path.basename(video_path)}",
-                                    parse_mode=ParseMode.HTML
+                                    parse_mode=ParseMode.HTML,
+                                    supports_streaming=True
                                 )
                                 logger.info(f"Sent video {video_path} to Telegram chat {chat_id}")
                             except Exception as e:
@@ -240,7 +273,8 @@ async def send_video_files():
                                     chat_id=chat_id,
                                     video=f,
                                     caption=f"Video: {os.path.basename(video_path)}",
-                                    parse_mode=ParseMode.HTML
+                                    parse_mode=ParseMode.HTML,
+                                    supports_streaming=True
                                 )
                                 logger.info(f"Sent video {video_path} to Telegram chat {chat_id}")
                             except Exception as e:

@@ -350,6 +350,62 @@ async def process_channel(channel_name, base_dir="screenshots", duplicate_checke
     logger.info(f"Обработано файлов для канала {channel_name}: {len(results)}")
     return results
 
+def get_daily_file_path():
+    """Get the path for today's daily file."""
+    today = datetime.now().strftime("%Y-%m-%d")
+    return f"logs/daily_lines_{today}.xlsx"
+
+def load_daily_file():
+    """Load today's daily file if it exists."""
+    file_path = get_daily_file_path()
+    if os.path.exists(file_path):
+        try:
+            return pd.read_excel(file_path)
+        except Exception as e:
+            logger.error(f"Error loading daily file: {e}")
+            return pd.DataFrame(columns=["Channel", "Timestamp", "Text", "Source"])
+    return pd.DataFrame(columns=["Channel", "Timestamp", "Text", "Source"])
+
+def save_to_daily_file(new_data):
+    """Save new data to daily file and return only new entries."""
+    try:
+        file_path = get_daily_file_path()
+        daily_df = load_daily_file()
+        
+        # Convert new data to DataFrame if it's a list
+        if isinstance(new_data, list):
+            new_df = pd.DataFrame(new_data)
+        else:
+            new_df = new_data
+            
+        # Find new entries by comparing with existing data
+        if not daily_df.empty:
+            # Create a set of existing texts for faster lookup
+            existing_texts = set(daily_df['Text'].str.lower())
+            # Filter out entries that already exist
+            new_entries = new_df[~new_df['Text'].str.lower().isin(existing_texts)]
+        else:
+            new_entries = new_df
+            
+        # Combine with existing data
+        combined_df = pd.concat([daily_df, new_entries], ignore_index=True)
+        
+        # Remove duplicates based on Text column
+        combined_df = combined_df.drop_duplicates(subset=['Text'], keep='first')
+        
+        # Sort by Timestamp
+        combined_df = combined_df.sort_values('Timestamp')
+        
+        # Save to file
+        combined_df.to_excel(file_path, index=False, engine='openpyxl')
+        logger.info(f"Saved {len(new_entries)} new entries to daily file")
+        
+        # Return the new entries and their sources
+        return file_path, new_entries
+    except Exception as e:
+        logger.error(f"Error saving to daily file: {e}")
+        return None, pd.DataFrame()
+
 async def process_screenshots(base_dir="screenshots"):
     """Основная функция обработки всех каналов и сохранения в Excel."""
     try:
@@ -392,6 +448,18 @@ async def process_screenshots(base_dir="screenshots"):
             df = pd.DataFrame(all_results)
             df.to_excel(excel_file, index=False, engine='openpyxl')
             logger.info(f"Результаты сохранены в Excel: {excel_file}")
+            
+            # Save to daily file and get new entries
+            daily_file, new_entries = save_to_daily_file(df)
+            if daily_file:
+                logger.info(f"Results also saved to daily file: {daily_file}")
+                if not new_entries.empty:
+                    logger.info(f"Found {len(new_entries)} new entries to send to Telegram")
+                    return excel_file, [r["Source"] for r in new_entries.to_dict('records')]
+                else:
+                    logger.info("No new entries to send to Telegram")
+                    return excel_file, []
+            
         except ImportError:
             logger.error("Библиотека openpyxl не установлена, невозможно сохранить результаты")
             return None, None
@@ -399,7 +467,7 @@ async def process_screenshots(base_dir="screenshots"):
             logger.error(f"Ошибка при сохранении в Excel: {e}")
             return None, None
         
-        return excel_file, [r["Source"] for r in all_results]
+        return excel_file, []
 
     except Exception as e:
         logger.error(f"Ошибка при обработке файлов: {e}")

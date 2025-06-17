@@ -13,7 +13,7 @@ from UI import MonitoringUI
 from rbk_mir24_parser import process_rbk_mir24, stop_rbk_mir24
 from utils import setup_logging
 from parser_lines import main as start_lines_monitoring, stop_subprocesses, start_force_capture, stop_force_capture
-from lines_to_csv import process_screenshots
+from lines_to_csv import process_screenshots, get_daily_file_path
 from telegram_sender import send_files
 
 # Инициализация логирования
@@ -102,6 +102,10 @@ class MonitoringApp:
         for time_str in ["11:30", "14:30", "17:50", "22:00"]:
             schedule.every().day.at(time_str).do(self._start_tvc_monitoring)
             logger.info(f"Добавлено расписание для TVC: {time_str}")
+
+        # Настройка отправки ежедневного файла в Telegram
+        schedule.every().day.at("22:00").do(self._send_daily_file_to_telegram)
+        logger.info("Добавлено расписание отправки ежедневного файла в Telegram: 22:00")
 
         logger.info("Расписание настроено, начинаем выполнение...")
         self.ui.update_scheduler_status("Активен")
@@ -381,9 +385,9 @@ class MonitoringApp:
                 self.ui.update_processing_status("Отправка завершена")
                 messagebox.showinfo("Успех", "Файлы успешно отправлены в Telegram")
             else:
-                self.ui.update_status("Нет файлов для отправки")
-                self.ui.update_processing_status("Нет файлов для отправки")
-                messagebox.showinfo("Информация", "Нет файлов для отправки в Telegram")
+                self.ui.update_status("Нет новых файлов для отправки")
+                self.ui.update_processing_status("Нет новых файлов для отправки")
+                messagebox.showinfo("Информация", "Нет новых файлов для отправки в Telegram")
 
         except Exception as e:
             logger.error(f"Ошибка при отправке в Telegram: {e}")
@@ -536,6 +540,26 @@ class MonitoringApp:
         except Exception as e:
             logger.error(f"Ошибка при обработке и отправке скриншотов: {e}")
             self.ui.update_processing_status(f"Ошибка: {str(e)}")
+
+    def _send_daily_file_to_telegram(self):
+        """Отправка ежедневного файла в Telegram."""
+        try:
+            file_path = get_daily_file_path()
+            if os.path.exists(file_path):
+                logger.info(f"Отправка ежедневного файла в Telegram: {file_path}")
+                self.ui.update_status("Отправка ежедневного файла в Telegram...")
+                
+                # Отправляем файл
+                send_files(file_path, [])
+                
+                self.ui.update_status("Ежедневный файл отправлен в Telegram")
+                logger.info("Ежедневный файл успешно отправлен в Telegram")
+            else:
+                logger.warning("Ежедневный файл не найден для отправки")
+                self.ui.update_status("Ежедневный файл не найден")
+        except Exception as e:
+            logger.error(f"Ошибка при отправке ежедневного файла в Telegram: {e}")
+            self.ui.update_status(f"Ошибка отправки ежедневного файла: {str(e)}")
 
     def cleanup(self):
         """Очистка ресурсов при закрытии приложения."""
