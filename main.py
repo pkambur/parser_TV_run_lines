@@ -9,6 +9,8 @@ from datetime import datetime, time, timedelta
 import schedule
 import time as time_module
 import sys
+import json
+from pathlib import Path
 
 from UI import MonitoringUI
 from rbk_mir24_parser import process_rbk_mir24, stop_rbk_mir24
@@ -16,6 +18,7 @@ from utils import setup_logging
 from parser_lines import main as start_lines_monitoring, stop_subprocesses, start_force_capture, stop_force_capture
 from lines_to_csv import process_screenshots, get_daily_file_path
 from telegram_sender import send_files
+from video_text_recognition import VideoTextRecognizer
 
 # Инициализация логирования
 logger = setup_logging()
@@ -49,6 +52,11 @@ class MonitoringApp:
         
         self.lines_monitoring_thread = None
         self.lines_monitoring_running = False
+
+        # Переменные для распознавания видео
+        self.video_recognition_thread = None
+        self.video_recognition_running = False
+        self.video_recognizer = None
 
         # Инициализируем event loop
         self.loop = asyncio.new_event_loop()
@@ -387,9 +395,9 @@ class MonitoringApp:
             messagebox.showerror("Ошибка", f"Не удалось сохранить строки в CSV: {e}")
 
     def send_to_telegram(self):
-        """Отправка файлов в Telegram."""
+        """Отправка строк (скриншотов и Excel) в Telegram."""
         try:
-            self.ui.update_status("Отправка файлов в Telegram...")
+            self.ui.update_status("Отправка строк в Telegram...")
             self.ui.update_processing_status("Подготовка файлов...")
             # Запускаем процесс отправки в отдельном потоке
             thread = threading.Thread(
@@ -398,26 +406,15 @@ class MonitoringApp:
             )
             thread.start()
         except Exception as e:
-            logger.error(f"Ошибка при запуске отправки в Telegram: {e}")
-            self.ui.update_status("Ошибка при отправке в Telegram")
+            logger.error(f"Ошибка при запуске отправки строк в Telegram: {e}")
+            self.ui.update_status("Ошибка при отправке строк в Telegram")
             self.ui.update_processing_status(f"Ошибка: {str(e)}")
-            messagebox.showerror("Ошибка", f"Не удалось отправить файлы в Telegram: {e}")
+            messagebox.showerror("Ошибка", f"Не удалось отправить строки в Telegram: {e}")
 
     def _send_to_telegram_task(self):
-        """Задача отправки файлов в Telegram."""
+        """Задача отправки строк в Telegram."""
         try:
             files_sent = False
-            
-            # Проверяем наличие видео файлов
-            video_dir = "video"
-            if os.path.exists(video_dir) and os.listdir(video_dir):
-                self.ui.update_processing_status("Отправка видео файлов...")
-                from telegram_sender import send_video_files_sync
-                send_video_files_sync()
-                self.ui.update_processing_status("Видео файлы отправлены")
-                files_sent = True
-            else:
-                logger.info("Нет видео файлов для отправки")
             
             # Проверяем наличие скриншотов
             processed_dir = "screenshots_processed"
@@ -469,10 +466,10 @@ class MonitoringApp:
                 messagebox.showinfo("Информация", "Нет новых файлов для отправки в Telegram")
 
         except Exception as e:
-            logger.error(f"Ошибка при отправке в Telegram: {e}")
-            self.ui.update_status("Ошибка при отправке в Telegram")
+            logger.error(f"Ошибка при отправке строк в Telegram: {e}")
+            self.ui.update_status("Ошибка при отправке строк в Telegram")
             self.ui.update_processing_status(f"Ошибка: {str(e)}")
-            messagebox.showerror("Ошибка", f"Не удалось отправить файлы в Telegram: {e}")
+            messagebox.showerror("Ошибка", f"Не удалось отправить строки в Telegram: {e}")
 
     def _start_rbk_mir24_monitoring(self):
         """Запуск мониторинга RBK и MIR24."""
@@ -641,84 +638,377 @@ class MonitoringApp:
             self.ui.update_status(f"Ошибка отправки ежедневного файла: {str(e)}")
 
     def _check_and_send_new_files(self):
-        """Проверка и отправка новых файлов в Telegram."""
+        """Проверка и отправка новых файлов."""
         try:
-            processed_dir = "screenshots_processed"
-            if not os.path.exists(processed_dir):
-                return
-
-            # Получаем список файлов из директории screenshots_processed
-            screenshot_files = []
-            for file in os.listdir(processed_dir):
-                if file.endswith(('.jpg', '.jpeg', '.png')):
-                    screenshot_files.append([file])
-
-            if screenshot_files:
-                # Находим последний Excel файл в папке logs
-                logs_dir = get_logs_dir()
-                excel_files = [f for f in os.listdir(logs_dir) if f.endswith('.xlsx')]
-                if excel_files:
-                    # Сортируем файлы по времени создания и берем последний
-                    latest_excel = max(excel_files, key=lambda x: os.path.getctime(os.path.join(logs_dir, x)))
-                    excel_path = os.path.join(logs_dir, latest_excel)
-
-                    # Отправляем скриншоты и Excel в Telegram
-                    self.ui.update_processing_status("Отправка новых скриншотов и Excel...")
-                    from telegram_sender import send_files
+            # Проверяем новые скриншоты
+            screenshots_dir = "screenshots"
+            if os.path.exists(screenshots_dir):
+                new_files = []
+                for filename in os.listdir(screenshots_dir):
+                    if filename.endswith('.jpg') and not filename.startswith('processed_'):
+                        file_path = os.path.join(screenshots_dir, filename)
+                        # Проверяем, что файл не старше 5 минут
+                        if time_module.time() - os.path.getmtime(file_path) < 300:
+                            new_files.append(file_path)
+                
+                if new_files:
+                    logger.info(f"Найдено {len(new_files)} новых файлов для отправки")
+                    self.ui.update_status(f"Отправка {len(new_files)} файлов...")
                     
-                    # Создаем новый event loop для отправки
-                    loop = asyncio.new_event_loop()
-                    asyncio.set_event_loop(loop)
-                    try:
-                        loop.run_until_complete(send_files(excel_path, screenshot_files))
-                        self.ui.update_processing_status("Новые скриншоты и Excel отправлены")
-                    finally:
-                        loop.close()
-
+                    # Отправляем файлы в Telegram
+                    for file_path in new_files:
+                        try:
+                            send_files([file_path])
+                            # Переименовываем файл как обработанный
+                            processed_path = os.path.join(screenshots_dir, f"processed_{os.path.basename(file_path)}")
+                            os.rename(file_path, processed_path)
+                            logger.info(f"Файл {file_path} отправлен и помечен как обработанный")
+                        except Exception as e:
+                            logger.error(f"Ошибка при отправке файла {file_path}: {e}")
+                    
+                    self.ui.update_status(f"Отправлено {len(new_files)} файлов")
         except Exception as e:
-            logger.error(f"Ошибка при проверке и отправке новых файлов: {e}")
-            self.ui.update_processing_status(f"Ошибка: {str(e)}")
+            logger.error(f"Ошибка при проверке новых файлов: {e}")
+
+    def start_video_recognition(self):
+        """Запуск распознавания текста из видео."""
+        if not self.video_recognition_running:
+            try:
+                self.video_recognition_running = True
+                self.ui.update_video_check_status("Выполняется")
+                self.ui.update_status("Запуск распознавания видео...")
+                
+                # Создаем распознаватель
+                self.video_recognizer = VideoTextRecognizer(
+                    video_dir="video",
+                    output_dir="recognized_text",
+                    keep_screenshots=False
+                )
+                
+                # Запускаем распознавание в отдельном потоке
+                self.video_recognition_thread = threading.Thread(
+                    target=self._run_video_recognition,
+                    daemon=True
+                )
+                self.video_recognition_thread.start()
+                
+                logger.info("Запущено распознавание видео")
+                
+            except Exception as e:
+                logger.error(f"Ошибка при запуске распознавания видео: {e}")
+                self.video_recognition_running = False
+                self.ui.update_video_check_status("Ошибка")
+                self.ui.update_status(f"Ошибка: {str(e)}")
+        else:
+            logger.warning("Распознавание видео уже запущено")
+            self.ui.update_status("Распознавание видео уже запущено")
+
+    def stop_video_recognition(self):
+        """Остановка распознавания текста из видео."""
+        if self.video_recognition_running:
+            try:
+                self.video_recognition_running = False
+                self.ui.update_video_check_status("Остановка...")
+                self.ui.update_status("Остановка распознавания видео...")
+                
+                # Ждем завершения потока
+                if self.video_recognition_thread and self.video_recognition_thread.is_alive():
+                    self.video_recognition_thread.join(timeout=5)
+                
+                self.ui.update_video_check_status("Остановлен")
+                self.ui.update_status("Распознавание видео остановлено")
+                logger.info("Распознавание видео остановлено")
+                
+            except Exception as e:
+                logger.error(f"Ошибка при остановке распознавания видео: {e}")
+                self.ui.update_video_check_status("Ошибка остановки")
+                self.ui.update_status(f"Ошибка остановки: {str(e)}")
+        else:
+            logger.warning("Распознавание видео не запущено")
+
+    def _run_video_recognition(self):
+        """Выполнение распознавания видео в отдельном потоке."""
+        try:
+            logger.info("Начало распознавания текста из видео")
+            self.ui.update_status("Распознавание текста из видео...")
+            
+            # Обрабатываем все каналы
+            results = self.video_recognizer.process_all_channels()
+            
+            # Подсчитываем общее количество распознанных текстов
+            total_texts = sum(len(texts) for texts in results.values())
+            
+            if total_texts > 0:
+                self.ui.update_status(f"Распознано {total_texts} текстов из видео")
+                logger.info(f"Распознавание завершено. Найдено {total_texts} текстов")
+                
+                # Показываем статистику по каналам
+                for channel, texts in results.items():
+                    if texts:
+                        logger.info(f"Канал {channel}: {len(texts)} текстов")
+            else:
+                self.ui.update_status("Тексты в видео не найдены")
+                logger.info("Распознавание завершено. Тексты не найдены")
+            
+            self.ui.update_video_check_status("Завершено")
+            
+        except Exception as e:
+            logger.error(f"Ошибка при распознавании видео: {e}")
+            self.ui.update_video_check_status("Ошибка")
+            self.ui.update_status(f"Ошибка распознавания: {str(e)}")
+        finally:
+            self.video_recognition_running = False
+
+    def send_video_to_telegram(self):
+        """Отправка видео с ключевыми словами в Telegram."""
+        try:
+            self.ui.update_status("Подготовка видео для отправки в Telegram...")
+            
+            # Запускаем отправку в отдельном потоке
+            send_thread = threading.Thread(
+                target=self._send_video_to_telegram_task,
+                daemon=True
+            )
+            send_thread.start()
+            
+            logger.info("Запущена отправка видео в Telegram")
+            
+        except Exception as e:
+            logger.error(f"Ошибка при запуске отправки видео: {e}")
+            self.ui.update_status(f"Ошибка: {str(e)}")
+
+    def _send_video_to_telegram_task(self):
+        """Выполнение отправки видео в Telegram в отдельном потоке."""
+        try:
+            logger.info("Начало обработки видео для отправки в Telegram")
+            self.ui.update_status("Обработка видео для отправки...")
+            
+            # Получаем список видео файлов с ключевыми словами
+            videos_with_keywords = self._get_videos_with_keywords()
+            
+            if not videos_with_keywords:
+                self.ui.update_status("Видео с ключевыми словами не найдены")
+                logger.info("Видео с ключевыми словами не найдены")
+                return
+            
+            logger.info(f"Найдено {len(videos_with_keywords)} видео с ключевыми словами")
+            self.ui.update_status(f"Отправка {len(videos_with_keywords)} видео в Telegram...")
+            
+            # Отправляем видео в Telegram
+            sent_count = 0
+            for video_info in videos_with_keywords:
+                try:
+                    video_path = video_info['video_path']
+                    channel_name = video_info['channel']
+                    found_keywords = video_info['found_keywords']
+                    
+                    # Отправляем видео
+                    success = self._send_single_video_to_telegram(video_path, channel_name, found_keywords)
+                    
+                    if success:
+                        sent_count += 1
+                        logger.info(f"Видео {video_path.name} отправлено в Telegram")
+                    else:
+                        logger.error(f"Не удалось отправить видео {video_path.name}")
+                        
+                except Exception as e:
+                    logger.error(f"Ошибка при отправке видео {video_info.get('video_path', 'unknown')}: {e}")
+            
+            # Удаляем все видео файлы (отправленные и неотправленные)
+            self._cleanup_video_files()
+            
+            self.ui.update_status(f"Отправлено {sent_count} видео в Telegram. Все видео удалены.")
+            logger.info(f"Отправка завершена. Отправлено {sent_count} видео, все файлы удалены")
+            
+        except Exception as e:
+            logger.error(f"Ошибка при отправке видео в Telegram: {e}")
+            self.ui.update_status(f"Ошибка отправки: {str(e)}")
+
+    def _get_videos_with_keywords(self):
+        """Получение списка видео файлов с ключевыми словами."""
+        videos_with_keywords = []
+        
+        try:
+            # Проверяем папку video
+            video_dir = Path("video")
+            if not video_dir.exists():
+                logger.warning("Папка video не найдена")
+                return videos_with_keywords
+            
+            # Проходим по всем подпапкам каналов
+            for channel_dir in video_dir.iterdir():
+                if not channel_dir.is_dir():
+                    continue
+                    
+                channel_name = channel_dir.name
+                
+                # Ищем видео файлы в папке канала
+                for video_file in channel_dir.glob("*.mp4"):
+                    try:
+                        # Проверяем, есть ли для этого видео распознанный текст с ключевыми словами
+                        if self._video_has_keywords(video_file, channel_name):
+                            videos_with_keywords.append({
+                                'video_path': video_file,
+                                'channel': channel_name,
+                                'found_keywords': self._get_video_keywords(video_file, channel_name)
+                            })
+                            logger.info(f"Видео {video_file.name} содержит ключевые слова")
+                    except Exception as e:
+                        logger.error(f"Ошибка при проверке видео {video_file}: {e}")
+            
+            logger.info(f"Найдено {len(videos_with_keywords)} видео с ключевыми словами")
+            
+        except Exception as e:
+            logger.error(f"Ошибка при поиске видео с ключевыми словами: {e}")
+        
+        return videos_with_keywords
+
+    def _video_has_keywords(self, video_file, channel_name):
+        """Проверка, содержит ли видео ключевые слова."""
+        try:
+            # Ищем JSON файлы с результатами распознавания
+            recognized_dir = Path("recognized_text")
+            if not recognized_dir.exists():
+                return False
+            
+            # Ищем файлы, содержащие имя видео
+            video_name = video_file.stem
+            for json_file in recognized_dir.glob(f"*{video_name}*.json"):
+                try:
+                    with open(json_file, 'r', encoding='utf-8') as f:
+                        data = json.load(f)
+                    
+                    # Проверяем, есть ли тексты с ключевыми словами
+                    if isinstance(data, list):
+                        for item in data:
+                            if (item.get('video_file') == video_file.name and 
+                                item.get('found_keywords') and 
+                                len(item.get('found_keywords', [])) > 0):
+                                return True
+                    
+                except Exception as e:
+                    logger.error(f"Ошибка при чтении файла {json_file}: {e}")
+            
+            return False
+            
+        except Exception as e:
+            logger.error(f"Ошибка при проверке ключевых слов для {video_file}: {e}")
+            return False
+
+    def _get_video_keywords(self, video_file, channel_name):
+        """Получение списка ключевых слов для видео."""
+        try:
+            recognized_dir = Path("recognized_text")
+            if not recognized_dir.exists():
+                return []
+            
+            video_name = video_file.stem
+            all_keywords = []
+            
+            for json_file in recognized_dir.glob(f"*{video_name}*.json"):
+                try:
+                    with open(json_file, 'r', encoding='utf-8') as f:
+                        data = json.load(f)
+                    
+                    if isinstance(data, list):
+                        for item in data:
+                            if item.get('video_file') == video_file.name:
+                                keywords = item.get('found_keywords', [])
+                                all_keywords.extend(keywords)
+                    
+                except Exception as e:
+                    logger.error(f"Ошибка при чтении ключевых слов из {json_file}: {e}")
+            
+            # Удаляем дубликаты
+            return list(set(all_keywords))
+            
+        except Exception as e:
+            logger.error(f"Ошибка при получении ключевых слов для {video_file}: {e}")
+            return []
+
+    def _send_single_video_to_telegram(self, video_path, channel_name, found_keywords):
+        """Отправка одного видео файла в Telegram."""
+        try:
+            # Формируем сообщение с информацией о ключевых словах
+            keywords_text = ", ".join(found_keywords) if found_keywords else "не указаны"
+            caption = f"Канал: {channel_name}\nКлючевые слова: {keywords_text}\nФайл: {video_path.name}"
+            
+            # Отправляем видео через telegram_sender
+            from telegram_sender import send_files
+            success = send_files([str(video_path)], caption=caption)
+            
+            return success
+            
+        except Exception as e:
+            logger.error(f"Ошибка при отправке видео {video_path}: {e}")
+            return False
+
+    def _cleanup_video_files(self):
+        """Удаление всех видео файлов после обработки."""
+        try:
+            video_dir = Path("video")
+            if not video_dir.exists():
+                return
+            
+            deleted_count = 0
+            
+            # Удаляем все видео файлы из всех подпапок
+            for channel_dir in video_dir.iterdir():
+                if not channel_dir.is_dir():
+                    continue
+                
+                for video_file in channel_dir.glob("*.mp4"):
+                    try:
+                        video_file.unlink()
+                        deleted_count += 1
+                        logger.info(f"Удален видео файл: {video_file}")
+                    except Exception as e:
+                        logger.error(f"Ошибка при удалении {video_file}: {e}")
+            
+            logger.info(f"Удалено {deleted_count} видео файлов")
+            
+        except Exception as e:
+            logger.error(f"Ошибка при очистке видео файлов: {e}")
 
     def cleanup(self):
         """Очистка ресурсов при закрытии приложения."""
         try:
+            logger.info("Начало очистки ресурсов...")
+            
             # Останавливаем планировщик
-            self.scheduler_running = False
-            if self.scheduler_thread and self.scheduler_thread.is_alive():
-                self.scheduler_thread.join(timeout=5.0)
+            if self.scheduler_running:
+                self.scheduler_running = False
+                logger.info("Планировщик остановлен")
             
-            # Сначала закрываем UI
-            logger.info("Закрытие UI")
-            self.ui.cleanup()
-            
-            if self.rbk_mir24_running:
-                logger.info("Остановка мониторинга RBK и MIR24 в cleanup")
-                self.stop_rbk_mir24()
-            
+            # Останавливаем мониторинг строк
             if self.lines_monitoring_running:
-                logger.info("Остановка мониторинга строк в cleanup")
-                self.stop_lines_monitoring()
+                stop_force_capture()
+                self.lines_monitoring_running = False
+                logger.info("Мониторинг строк остановлен")
+            
+            # Останавливаем RBK и MIR24
+            if self.rbk_mir24_running:
+                stop_rbk_mir24()
+                self.rbk_mir24_running = False
+                logger.info("RBK и MIR24 остановлены")
+            
+            # Останавливаем распознавание видео
+            if self.video_recognition_running:
+                self.video_recognition_running = False
+                if self.video_recognition_thread and self.video_recognition_thread.is_alive():
+                    self.video_recognition_thread.join(timeout=5)
+                logger.info("Распознавание видео остановлено")
             
             # Останавливаем event loop
-            if self.loop and self.loop.is_running():
-                logger.info("Остановка асинхронного цикла")
-                try:
-                    # Отменяем все задачи
-                    for task in asyncio.all_tasks(self.loop):
-                        task.cancel()
-                    
-                    # Останавливаем цикл
-                    self.loop.call_soon_threadsafe(self.loop.stop)
-                    
-                    # Даем время на завершение задач
-                    if self.thread and self.thread.is_alive():
-                        self.thread.join(timeout=5.0)
-                    
-                    # Закрываем цикл
-                    self.loop.close()
-                    logger.info("Асинхронный цикл закрыт")
-                except Exception as e:
-                    logger.error(f"Ошибка при остановке event loop: {e}")
+            if self.loop and not self.loop.is_closed():
+                self.loop.call_soon_threadsafe(self.loop.stop)
+                logger.info("Event loop остановлен")
+            
+            # Очищаем UI
+            if hasattr(self, 'ui'):
+                self.ui.cleanup()
+            
+            logger.info("Очистка ресурсов завершена")
             
         except Exception as e:
             logger.error(f"Ошибка при очистке ресурсов: {e}")

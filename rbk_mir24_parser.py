@@ -5,6 +5,9 @@ import asyncio
 import subprocess
 import urllib.request
 from datetime import datetime
+import cv2
+import numpy as np
+from utils import setup_logging
 
 logger = logging.getLogger(__name__)
 base_dir = os.path.abspath("video")  # Абсолютный путь для надежности
@@ -114,67 +117,113 @@ async def record_video(channel_name, channel_info, process_list):
         resolution = await check_video_resolution(channel_info["url"])
         crop_filter = await validate_crop_params(channel_name, channel_info, resolution)
 
-        cmd = [
-            "ffmpeg",
-            "-i", channel_info["url"],
-            "-t", str(VIDEO_DURATION),
-            "-c:v", "libx264",
-            "-preset", "ultrafast",
-            "-c:a", "aac",
-            "-b:a", "128k",
-            "-y"
-        ]
-
-        if crop_filter:
-            logger.info(f"Применение фильтра crop для {channel_name}: {crop_filter}")
-            cmd.extend(["-vf", crop_filter])
-        else:
-            logger.warning(f"Фильтр crop не указан или недействителен для {channel_name}")
-
-        cmd.append(output_path)
-
-        logger.info(f"Запуск записи видео для {channel_name}: {' '.join(cmd)}")
-        logger.info(f"Ожидаемый путь сохранения: {output_path}")
-
-        # Проверка доступности FFmpeg
-        try:
-            subprocess.run(["ffmpeg", "-version"], capture_output=True, text=True, check=True, 
-                         creationflags=subprocess.CREATE_NO_WINDOW if os.name == 'nt' else 0)
-        except (subprocess.CalledProcessError, FileNotFoundError):
-            logger.error("FFmpeg не установлен или не найден в PATH")
-            return
-
-        process = await asyncio.create_subprocess_exec(
-            *cmd,
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.PIPE
+        # Создаем задачу для записи видео
+        task = asyncio.create_task(
+            record_video_opencv(channel_name, channel_info["url"], output_path, crop_filter, VIDEO_DURATION)
         )
-        process_list.append(process)
+        process_list.append(task)
 
         try:
-            stdout, stderr = await asyncio.wait_for(process.communicate(), timeout=VIDEO_DURATION + 30)
-            logger.info(f"FFmpeg stdout для {channel_name}: {stdout.decode()}")
-            logger.info(f"FFmpeg stderr для {channel_name}: {stderr.decode()}")
-            if process.returncode != 0:
-                logger.error(f"Ошибка ffmpeg при записи {channel_name}")
-            elif os.path.exists(output_path):
+            await asyncio.wait_for(task, timeout=VIDEO_DURATION + 30)
+            if os.path.exists(output_path):
                 logger.info(f"Видео сохранено: {output_path}")
             else:
                 logger.warning(f"Файл не был создан: {output_path}")
         except asyncio.TimeoutError:
-            logger.error(f"FFmpeg timed out для {channel_name}")
-            process.kill()
-            await process.wait()
+            logger.error(f"Запись видео timed out для {channel_name}")
+            task.cancel()
         except asyncio.CancelledError:
             logger.info(f"Запись видео для {channel_name} отменена")
-            process.kill()
-            await process.wait()
+            task.cancel()
             raise
         finally:
-            if process in process_list:
-                process_list.remove(process)
+            if task in process_list:
+                process_list.remove(task)
     except Exception as e:
         logger.error(f"Ошибка при записи {channel_name}: {e}")
+
+async def record_video_opencv(channel_name, stream_url, output_path, crop_params, duration):
+    """Запись видео с использованием OpenCV."""
+    try:
+        # Открываем видеопоток
+        cap = cv2.VideoCapture(stream_url)
+        
+        if not cap.isOpened():
+            logger.error(f"Не удалось открыть видеопоток для {channel_name}: {stream_url}")
+            return
+        
+        # Получаем параметры исходного видео
+        fps = cap.get(cv2.CAP_PROP_FPS)
+        if fps <= 0:
+            fps = 25.0  # Значение по умолчанию
+        
+        width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
+        height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+        
+        # Применяем crop если указан
+        if crop_params:
+            try:
+                crop_str = crop_params.replace("crop=", "")
+                crop_width, crop_height, x, y = map(int, crop_str.split(":"))
+                width, height = crop_width, crop_height
+            except Exception as e:
+                logger.error(f"Ошибка при парсинге crop для {channel_name}: {e}")
+        
+        # Создаем VideoWriter
+        fourcc = cv2.VideoWriter_fourcc(*'mp4v')
+        out = cv2.VideoWriter(output_path, fourcc, fps, (width, height))
+        
+        if not out.isOpened():
+            logger.error(f"Не удалось создать VideoWriter для {channel_name}")
+            cap.release()
+            return
+        
+        start_time = asyncio.get_event_loop().time()
+        frame_count = 0
+        
+        logger.info(f"Начало записи видео для {channel_name}")
+        
+        while True:
+            # Проверяем время записи
+            if asyncio.get_event_loop().time() - start_time >= duration:
+                break
+            
+            # Читаем кадр
+            ret, frame = cap.read()
+            
+            if not ret or frame is None:
+                logger.warning(f"Не удалось прочитать кадр {frame_count} для {channel_name}")
+                break
+            
+            # Применяем crop если указан
+            if crop_params:
+                try:
+                    crop_str = crop_params.replace("crop=", "")
+                    crop_width, crop_height, x, y = map(int, crop_str.split(":"))
+                    frame = frame[y:y+crop_height, x:x+crop_width]
+                except Exception as e:
+                    logger.error(f"Ошибка при применении crop для кадра {frame_count} в {channel_name}: {e}")
+            
+            # Записываем кадр
+            out.write(frame)
+            frame_count += 1
+            
+            # Небольшая пауза для предотвращения блокировки
+            await asyncio.sleep(0.001)
+        
+        # Освобождаем ресурсы
+        cap.release()
+        out.release()
+        
+        logger.info(f"Запись завершена для {channel_name}: {frame_count} кадров")
+        
+    except Exception as e:
+        logger.error(f"Ошибка при записи видео для {channel_name}: {e}")
+        try:
+            cap.release()
+            out.release()
+        except:
+            pass
 
 async def process_rbk_mir24(app, ui, send_files=False, channels=None):
     logger.info("Запуск записи видеопотоков")

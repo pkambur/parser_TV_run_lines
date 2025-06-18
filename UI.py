@@ -77,6 +77,34 @@ class MonitoringUI:
         )
         self.stop_rbk_mir24_button.pack(side="left", padx=5)
         
+        # Добавляем кнопку проверки видео в тот же раздел
+        self.check_video_button = ttk.Button(
+            rbk_mir24_buttons,
+            text="Проверка видео",
+            command=self.app.start_video_recognition
+        )
+        self.check_video_button.pack(side="left", padx=5)
+        
+        self.stop_video_check_button = ttk.Button(
+            rbk_mir24_buttons,
+            text="Остановить проверку",
+            command=self.app.stop_video_recognition,
+            state="disabled"
+        )
+        self.stop_video_check_button.pack(side="left", padx=5)
+        
+        # Добавляем статус проверки видео в тот же раздел
+        self.video_check_status = ttk.Label(rbk_mir24_frame, text="Статус проверки: Ожидание")
+        self.video_check_status.pack(fill="x", pady=5)
+        
+        # Добавляем кнопку отправки видео в ТГ
+        self.send_video_tg_button = ttk.Button(
+            rbk_mir24_frame,
+            text="Отправить в ТГ",
+            command=self.app.send_video_to_telegram
+        )
+        self.send_video_tg_button.pack(fill="x", pady=5)
+        
         # Фрейм для статуса обработки файлов
         processing_frame = ttk.LabelFrame(self.root, text="Обработка файлов", padding=10)
         processing_frame.pack(fill="x", padx=10, pady=5)
@@ -131,6 +159,15 @@ class MonitoringUI:
             
     def update_processing_status(self, status):
         self.processing_status.config(text=f"Статус обработки: {status}")
+            
+    def update_video_check_status(self, status):
+        self.video_check_status.config(text=f"Статус: {status}")
+        if status == "Выполняется":
+            self.check_video_button.config(state="disabled")
+            self.stop_video_check_button.config(state="normal")
+        else:
+            self.check_video_button.config(state="normal")
+            self.stop_video_check_button.config(state="disabled")
             
     def update_scheduler_status(self, status):
         self.scheduler_status.config(text=f"Планировщик: {status}")

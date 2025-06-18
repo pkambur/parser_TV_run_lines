@@ -38,6 +38,7 @@ ENV/
 screenshots/
 screenshots_processed/
 video/
+recognized_text/
 logs/
 *.log
 *.xlsx

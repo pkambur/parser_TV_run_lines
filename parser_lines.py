@@ -6,6 +6,8 @@ import threading
 from datetime import datetime
 import subprocess
 from utils import setup_logging
+import cv2
+import numpy as np
 
 # Инициализация логирования
 logger = setup_logging()
@@ -40,53 +42,56 @@ def parse_interval(interval_str):
         return 10
 
 def capture_screenshot(channel_name, stream_url, output_dir, crop_params=None):
-    """Создание скриншота из видеопотока."""
+    """Создание скриншота из видеопотока с использованием OpenCV."""
     try:
         # Формируем имя файла с текущей датой и временем
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
         output_file = os.path.join(output_dir, f"{channel_name}_{timestamp}.jpg")
         
-        # Базовые параметры ffmpeg
-        ffmpeg_cmd = [
-            'ffmpeg',
-            '-y',  # Перезаписывать файл если существует
-            '-i', stream_url,
-            '-vframes', '1',  # Захватить только один кадр
-            '-q:v', '2'  # Качество JPEG (2 - лучшее)
-        ]
+        # Открываем видеопоток
+        cap = cv2.VideoCapture(stream_url)
         
-        # Добавляем параметры обрезки если они указаны
+        if not cap.isOpened():
+            logger.error(f"Не удалось открыть видеопоток для {channel_name}: {stream_url}")
+            return False
+        
+        # Читаем кадр
+        ret, frame = cap.read()
+        
+        if not ret or frame is None:
+            logger.error(f"Не удалось прочитать кадр из потока для {channel_name}")
+            cap.release()
+            return False
+        
+        # Применяем обрезку если указаны параметры
         if crop_params:
             try:
-                ffmpeg_cmd.extend(['-vf', crop_params])
+                # Парсим параметры crop (формат: crop=width:height:x:y)
+                crop_str = crop_params.replace("crop=", "")
+                width, height, x, y = map(int, crop_str.split(":"))
+                h, w = frame.shape[:2]
+                if x + width > w or y + height > h:
+                    logger.warning(f"Параметры crop для {channel_name} превышают размеры кадра. Используется полный кадр.")
+                else:
+                    frame = frame[y:y+height, x:x+width]
             except Exception as e:
-                logger.error(f"Ошибка при формировании параметров обрезки для {channel_name}: {e}")
+                logger.error(f"Ошибка при применении crop для {channel_name}: {e}. Используется полный кадр.")
+        else:
+            logger.info(f"Для канала {channel_name} не указан crop. Используется полный кадр.")
         
-        # Добавляем выходной файл
-        ffmpeg_cmd.append(output_file)
+        # Сохраняем изображение
+        success = cv2.imwrite(output_file, frame, [cv2.IMWRITE_JPEG_QUALITY, 95])
         
-        # Запускаем ffmpeg
-        process = subprocess.Popen(
-            ffmpeg_cmd,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            creationflags=subprocess.CREATE_NO_WINDOW if os.name == 'nt' else 0
-        )
+        # Освобождаем ресурсы
+        cap.release()
         
-        # Ждем завершения процесса
-        stdout, stderr = process.communicate(timeout=30)
-        
-        if process.returncode == 0:
+        if success:
             logger.info(f"Скриншот создан: {output_file}")
             return True
         else:
-            logger.error(f"Ошибка при создании скриншота: {stderr.decode()}")
+            logger.error(f"Не удалось сохранить скриншот для {channel_name}")
             return False
             
-    except subprocess.TimeoutExpired:
-        process.kill()
-        logger.error(f"Таймаут при создании скриншота для {channel_name}")
-        return False
     except Exception as e:
         logger.error(f"Ошибка при создании скриншота для {channel_name}: {e}")
         return False

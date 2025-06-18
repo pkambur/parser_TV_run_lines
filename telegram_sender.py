@@ -348,5 +348,97 @@ def send_video_files_sync():
         loop.run_until_complete(asyncio.gather(*pending, return_exceptions=True))
         loop.close()
 
+async def send_files_with_caption(file_paths, caption=""):
+    """Отправка файлов в Telegram с пользовательским caption."""
+    try:
+        bot = Bot(token=TELEGRAM_TOKEN)
+        sent_files = []  # Список для отслеживания успешно отправленных файлов
+        available_chats = []  # Список доступных чатов
+
+        # Проверяем доступность чатов
+        for chat_id in CHAT_IDS:
+            try:
+                await bot.get_chat(chat_id)
+                logger.info(f"Chat {chat_id} is available")
+                available_chats.append(chat_id)
+            except Exception as e:
+                logger.error(f"Chat {chat_id} is not available: {e}")
+                continue
+
+        if not available_chats:
+            logger.error("No available chats found")
+            raise Exception("No available chats found")
+
+        # Отправляем файлы
+        for file_path in file_paths:
+            if not os.path.exists(file_path):
+                logger.warning(f"File not found: {file_path}")
+                continue
+                
+            try:
+                file_ext = os.path.splitext(file_path)[1].lower()
+                
+                with open(file_path, 'rb') as f:
+                    for chat_id in available_chats:
+                        try:
+                            if file_ext in ['.mp4', '.avi', '.mkv', '.mov']:
+                                # Отправляем как видео
+                                await bot.send_video(
+                                    chat_id=chat_id,
+                                    video=f,
+                                    caption=caption,
+                                    parse_mode=ParseMode.HTML,
+                                    supports_streaming=True
+                                )
+                            else:
+                                # Отправляем как документ
+                                await bot.send_document(
+                                    chat_id=chat_id,
+                                    document=f,
+                                    caption=caption,
+                                    parse_mode=ParseMode.HTML
+                                )
+                            logger.info(f"Sent file {file_path} to Telegram chat {chat_id}")
+                        except Exception as e:
+                            logger.error(f"Error sending file to chat {chat_id}: {e}")
+                
+                sent_files.append(file_path)
+                
+            except Exception as e:
+                logger.error(f"Error sending file {file_path}: {e}")
+
+        return len(sent_files) > 0
+
+    except Exception as e:
+        logger.error(f"Error sending files to Telegram: {e}")
+        raise
+
+def send_files(file_paths, caption=""):
+    """Send files to Telegram with custom caption."""
+    import asyncio
+    try:
+        # Создаем новый event loop
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+        
+        # Запускаем отправку
+        success = loop.run_until_complete(send_files_with_caption(file_paths, caption))
+        if success:
+            logger.info("Files sent successfully")
+        else:
+            logger.warning("No files were sent")
+        return success
+    except Exception as e:
+        logger.error(f"Failed to send files: {e}")
+        raise
+    finally:
+        # Закрываем все задачи перед закрытием цикла
+        pending = asyncio.all_tasks(loop)
+        for task in pending:
+            task.cancel()
+        # Даем время на завершение задач
+        loop.run_until_complete(asyncio.gather(*pending, return_exceptions=True))
+        loop.close()
+
 if __name__ == "__main__":
     pass
