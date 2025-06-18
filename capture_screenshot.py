@@ -28,4 +28,4 @@ command0 = f"c:/Program Files/ffmpeg/bin/ffmpeg.exe -i \"{url_m3u8}\" -vf \"fps=
 # https://stackoverflow.com/questions/72738553/how-can-i-run-an-ffmpeg-command-in-a-python-script
 command = shlex.split(command0)
 # print(command)
-subprocess.run(command)
+subprocess.run(command, creationflags=subprocess.CREATE_NO_WINDOW if os.name == 'nt' else 0)

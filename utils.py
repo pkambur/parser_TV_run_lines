@@ -1,5 +1,7 @@
 import asyncio
 import logging
+import os
+import sys
 from functools import wraps
 
 logger = logging.getLogger(__name__)
@@ -7,11 +9,28 @@ logger = logging.getLogger(__name__)
 
 def setup_logging():
     """Настройка логирования."""
+    # Получаем путь к директории исполняемого файла
+    if getattr(sys, 'frozen', False):
+        # Если это исполняемый файл (PyInstaller)
+        base_path = os.path.dirname(sys.executable)
+    else:
+        # Если это скрипт Python
+        base_path = os.path.dirname(os.path.abspath(__file__))
+    
+    # Создаем путь к директории logs относительно исполняемого файла
+    logs_dir = os.path.join(base_path, 'logs')
+    
+    # Создаем директорию logs, если она не существует
+    os.makedirs(logs_dir, exist_ok=True)
+    
+    # Путь к файлу лога
+    log_file = os.path.join(logs_dir, 'main_log.txt')
+    
     logging.basicConfig(
         level=logging.INFO,
         format='%(asctime)s - %(levelname)s - %(name)s - %(message)s',
         handlers=[
-            logging.FileHandler('logs/main_log.txt', encoding='utf-8'),
+            logging.FileHandler(log_file, encoding='utf-8'),
             logging.StreamHandler()
         ]
     )

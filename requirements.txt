@@ -1,5 +1,6 @@
 # Основные библиотеки
 schedule==1.2.1
+apscheduler==3.10.4
 python-telegram-bot==20.7
 opencv-python==4.9.0.80
 numpy==1.26.4

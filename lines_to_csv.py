@@ -15,6 +15,9 @@ from huggingface_hub import HfApi, InferenceClient
 import hashlib
 from collections import defaultdict
 import shutil
+import sys
+import easyocr
+from difflib import SequenceMatcher
 
 logger = logging.getLogger(__name__)
 
@@ -79,7 +82,6 @@ async def recognize_text(image_path):
 
 async def is_similar_text(text1, text2, threshold=0.9):
     """Проверка схожести двух текстов."""
-    from difflib import SequenceMatcher
     return SequenceMatcher(None, text1, text2).ratio() > threshold
 
 async def combine_texts(texts):
@@ -353,7 +355,8 @@ async def process_channel(channel_name, base_dir="screenshots", duplicate_checke
 def get_daily_file_path():
     """Get the path for today's daily file."""
     today = datetime.now().strftime("%Y-%m-%d")
-    return f"logs/daily_lines_{today}.xlsx"
+    logs_dir = get_logs_dir()
+    return os.path.join(logs_dir, f"daily_lines_{today}.xlsx")
 
 def load_daily_file():
     """Load today's daily file if it exists."""
@@ -406,6 +409,20 @@ def save_to_daily_file(new_data):
         logger.error(f"Error saving to daily file: {e}")
         return None, pd.DataFrame()
 
+def get_logs_dir():
+    """Получение пути к директории logs относительно исполняемого файла."""
+    if getattr(sys, 'frozen', False):
+        # Если это исполняемый файл (PyInstaller)
+        base_path = os.path.dirname(sys.executable)
+    else:
+        # Если это скрипт Python
+        base_path = os.path.dirname(os.path.abspath(__file__))
+    
+    logs_dir = os.path.join(base_path, 'logs')
+    # Создаем директорию logs, если она не существует
+    os.makedirs(logs_dir, exist_ok=True)
+    return logs_dir
+
 async def process_screenshots(base_dir="screenshots"):
     """Основная функция обработки всех каналов и сохранения в Excel."""
     try:
@@ -442,11 +459,11 @@ async def process_screenshots(base_dir="screenshots"):
 
         timestamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
         
-        # Создаём директорию logs, если не существует
-        os.makedirs("logs", exist_ok=True)
+        # Получаем путь к директории logs
+        logs_dir = get_logs_dir()
         
         # Сохраняем в Excel
-        excel_file = f"logs/recognized_text_{timestamp}.xlsx"
+        excel_file = os.path.join(logs_dir, f"recognized_text_{timestamp}.xlsx")
         try:
             df = pd.DataFrame(all_results)
             df.to_excel(excel_file, index=False, engine='openpyxl')

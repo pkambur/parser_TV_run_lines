@@ -138,7 +138,8 @@ async def record_video(channel_name, channel_info, process_list):
 
         # Проверка доступности FFmpeg
         try:
-            subprocess.run(["ffmpeg", "-version"], capture_output=True, text=True, check=True)
+            subprocess.run(["ffmpeg", "-version"], capture_output=True, text=True, check=True, 
+                         creationflags=subprocess.CREATE_NO_WINDOW if os.name == 'nt' else 0)
         except (subprocess.CalledProcessError, FileNotFoundError):
             logger.error("FFmpeg не установлен или не найден в PATH")
             return

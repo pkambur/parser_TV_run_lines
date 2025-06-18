@@ -5,9 +5,10 @@ import tkinter as tk
 from tkinter import ttk, messagebox
 import os
 import csv
-from datetime import datetime, time
+from datetime import datetime, time, timedelta
 import schedule
 import time as time_module
+import sys
 
 from UI import MonitoringUI
 from rbk_mir24_parser import process_rbk_mir24, stop_rbk_mir24
@@ -18,6 +19,20 @@ from telegram_sender import send_files
 
 # Инициализация логирования
 logger = setup_logging()
+
+def get_logs_dir():
+    """Получение пути к директории logs относительно исполняемого файла."""
+    if getattr(sys, 'frozen', False):
+        # Если это исполняемый файл (PyInstaller)
+        base_path = os.path.dirname(sys.executable)
+    else:
+        # Если это скрипт Python
+        base_path = os.path.dirname(os.path.abspath(__file__))
+    
+    logs_dir = os.path.join(base_path, 'logs')
+    # Создаем директорию logs, если она не существует
+    os.makedirs(logs_dir, exist_ok=True)
+    return logs_dir
 
 class MonitoringApp:
     def __init__(self):
@@ -419,7 +434,7 @@ class MonitoringApp:
 
             if screenshot_files:
                 # Находим последний Excel файл в папке logs
-                logs_dir = "logs"
+                logs_dir = get_logs_dir()
                 excel_files = [f for f in os.listdir(logs_dir) if f.endswith('.xlsx')]
                 if excel_files:
                     # Сортируем файлы по времени создания и берем последний
@@ -640,7 +655,7 @@ class MonitoringApp:
 
             if screenshot_files:
                 # Находим последний Excel файл в папке logs
-                logs_dir = "logs"
+                logs_dir = get_logs_dir()
                 excel_files = [f for f in os.listdir(logs_dir) if f.endswith('.xlsx')]
                 if excel_files:
                     # Сортируем файлы по времени создания и берем последний

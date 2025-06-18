@@ -69,7 +69,8 @@ def capture_screenshot(channel_name, stream_url, output_dir, crop_params=None):
         process = subprocess.Popen(
             ffmpeg_cmd,
             stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE
+            stderr=subprocess.PIPE,
+            creationflags=subprocess.CREATE_NO_WINDOW if os.name == 'nt' else 0
         )
         
         # Ждем завершения процесса

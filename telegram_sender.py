@@ -1,4 +1,5 @@
 import os
+import sys
 import logging
 from datetime import datetime
 from telegram import Bot
@@ -9,16 +10,36 @@ import shutil
 import pandas as pd
 
 # Настройка логирования
-os.makedirs("logs", exist_ok=True)
-logging.basicConfig(
-    level=logging.INFO,
-    format='%(asctime)s - %(levelname)s - %(message)s',
-    handlers=[
-        logging.FileHandler("logs/telegram_sender_log.log"),
-        logging.StreamHandler()
-    ]
-)
-logger = logging.getLogger(__name__)
+def setup_logging():
+    """Настройка логирования для telegram_sender."""
+    # Получаем путь к директории исполняемого файла
+    if getattr(sys, 'frozen', False):
+        # Если это исполняемый файл (PyInstaller)
+        base_path = os.path.dirname(sys.executable)
+    else:
+        # Если это скрипт Python
+        base_path = os.path.dirname(os.path.abspath(__file__))
+    
+    # Создаем путь к директории logs относительно исполняемого файла
+    logs_dir = os.path.join(base_path, 'logs')
+    
+    # Создаем директорию logs, если она не существует
+    os.makedirs(logs_dir, exist_ok=True)
+    
+    # Путь к файлу лога
+    log_file = os.path.join(logs_dir, 'telegram_sender_log.log')
+    
+    logging.basicConfig(
+        level=logging.INFO,
+        format='%(asctime)s - %(levelname)s - %(message)s',
+        handlers=[
+            logging.FileHandler(log_file),
+            logging.StreamHandler()
+        ]
+    )
+    return logging.getLogger(__name__)
+
+logger = setup_logging()
 
 # Telegram bot configuration
 TELEGRAM_TOKEN = "7014463362:AAEDPF4MzfgxcZBwClW7nTONtJqk_04uJ4g"
