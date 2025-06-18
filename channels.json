@@ -4,11 +4,6 @@
         "interval": "1/7",
         "crop": "crop=1500:45:330:960"
     },
-    "NTV": {
-        "url": "https://cdn.ntv.ru/ntv-msk_hd/tracks-v4a1/rewind-7150.m3u8",
-        "interval": "1/10",
-        "crop": "crop=852:40:2:440"
-    },
     "360": {
         "url": "https://e10-ll.facecast.io/evacoder_hls_hi/UBZfFgtKB1JwTwoDERNQVGGs/1.m3u8",
         "interval": "1/7",
@@ -53,10 +48,5 @@
         "url": "https://edge02p.mediavitrina.ru/hls-livef1/ren-tv/tracks-v3a1/mono.m3u8?token=v2.r-qatI1z2WpPS0twJCkuRWsyQPgZrpPbxqRAL6QQjuI.KUBN6c3NrcAntvJwmOc6NiK5AuEeJUuaWOjwSGM3HC4.1750579048.3477046d9d3341d7869e3beb114ce559",
         "interval": "1/11",
         "crop": "crop=604:30:150:450"
-    },
-    "M24": {
-        "url": "https://region-m.livecdn.ivi.ru/jW1KPWLf4P8dgbuUUv4J1A0W7WOr2Qh5hTvRVJGYWdhQ9gilgLGk83109/QoPZ-1AqZpKnSRAvB3Atmg,1750196312/noargs/Moscow24/480p.m3u8",
-        "interval": "1/10",
-        "crop": "crop=515:56:200:520"
     }
 }
