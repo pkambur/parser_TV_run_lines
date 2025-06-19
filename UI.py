@@ -6,6 +6,7 @@ import cv2
 import threading
 import json
 import os
+import numpy as np
 
 logger = logging.getLogger(__name__)
 
@@ -110,40 +111,70 @@ class MonitoringUI:
         self.status_label.pack(side="bottom", fill="x", padx=10, pady=5)
 
     def _create_video_grid(self):
-        # 2x2 сетка для 4 видеопотоков
         grid = tk.Frame(self.main_area, bg="#222")
         grid.pack(expand=True, fill="both", padx=20, pady=20)
         self.video_labels = []
         self.comboboxes = []
+        self.grid_cells = []
         for i in range(2):
             for j in range(2):
                 idx = i*2 + j
-                frame = tk.Frame(grid, bg="#111", bd=2, relief="groove")
-                frame.grid(row=i*2, column=j, padx=20, pady=20, sticky="nsew")
-                # Видео-Label
-                video_label = tk.Label(frame, bg="#000", width=400, height=225)
-                video_label.pack()
+                # Основной cell для видео
+                cell = tk.Frame(grid, bg="#111", bd=2, relief="groove")
+                cell.grid(row=i*2, column=j, padx=20, pady=(20, 2), sticky="nsew")
+                grid.grid_rowconfigure(i*2, weight=3)
+                grid.grid_columnconfigure(j, weight=1)
+                video_label = tk.Label(cell, bg="#000")
+                video_label.pack(expand=True, fill="both")
                 self.video_labels.append(video_label)
-                # Combobox для выбора канала
-                combo = ttk.Combobox(frame, values=self.channel_names, state="readonly")
+                self.grid_cells.append(cell)
+                # Отдельный frame для Combobox
+                combo_cell = tk.Frame(grid, bg="#222", height=40, width=200)
+                combo_cell.grid(row=i*2+1, column=j, padx=20, pady=(0, 20), sticky="nsew")
+                grid.grid_rowconfigure(i*2+1, weight=1)
+                combo = ttk.Combobox(combo_cell, values=self.channel_names, state="readonly", width=24)
                 combo.set(self.selected_channels[idx])
-                combo.pack(pady=5)
+                combo.pack(expand=True, fill="x", pady=5)
                 combo.bind("<<ComboboxSelected>>", lambda e, k=idx: self.on_channel_change(k))
                 self.comboboxes.append(combo)
-        # Настроить веса для растяжения
-        for i in range(4):
-            grid.grid_rowconfigure(i, weight=1)
-            grid.grid_columnconfigure(i, weight=1)
-        # Запустить потоки для видео
+        self.main_area.bind("<Configure>", self._on_resize)
         for idx in range(4):
             self.start_video_stream(idx)
+
+    def _on_resize(self, event=None):
+        # При изменении размера main_area обновить кадры
+        for idx in range(4):
+            self._force_update_frame(idx)
+
+    def _force_update_frame(self, idx):
+        # Принудительно обновить кадр для корректного ресайза
+        if hasattr(self, 'captures') and self.captures[idx] is not None:
+            cap = self.captures[idx]
+            if cap.isOpened():
+                ret, frame = cap.read()
+                if not ret or frame is None:
+                    frame = np.zeros((240, 400, 3), dtype=np.uint8)
+                label = self.video_labels[idx]
+                w = label.winfo_width()
+                h = label.winfo_height()
+                if w < 10 or h < 10:
+                    w, h = 400, 225
+                frame = cv2.resize(frame, (w, h))
+                img = Image.fromarray(cv2.cvtColor(frame, cv2.COLOR_BGR2RGB))
+                imgtk = ImageTk.PhotoImage(image=img)
+                label.imgtk = imgtk
+                label.configure(image=imgtk)
 
     def toggle_sidebar(self):
         if self.sidebar_visible:
             self.sidebar.pack_forget()
             self.sidebar_visible = False
         else:
+            # Удаляем sidebar и main_area из pack, чтобы порядок был правильный
+            self.sidebar.pack_forget()
+            self.main_area.pack_forget()
             self.sidebar.pack(side="left", fill="y")
+            self.main_area.pack(side="left", fill="both", expand=True)
             self.sidebar_visible = True
 
     def on_channel_change(self, idx):
@@ -167,22 +198,25 @@ class MonitoringUI:
             self.after_ids[idx] = None
         channel = self.selected_channels[idx]
         url = self.channels[channel]["url"]
-        cap = cv2.VideoCapture(url)
-        self.captures[idx] = cap
+        self.captures[idx] = cap = cv2.VideoCapture(url)
         def update_frame():
             if cap is None or not cap.isOpened():
-                img = Image.new("RGB", (400, 225), color=(30, 30, 30))
+                frame = np.zeros((240, 400, 3), dtype=np.uint8)
             else:
                 ret, frame = cap.read()
                 if not ret or frame is None:
-                    img = Image.new("RGB", (400, 225), color=(30, 30, 30))
-                else:
-                    frame = cv2.resize(frame, (400, 225))
-                    img = Image.fromarray(cv2.cvtColor(frame, cv2.COLOR_BGR2RGB))
+                    frame = np.zeros((240, 400, 3), dtype=np.uint8)
+            label = self.video_labels[idx]
+            w = label.winfo_width()
+            h = label.winfo_height()
+            if w < 10 or h < 10:
+                w, h = 400, 225
+            frame = cv2.resize(frame, (w, h))
+            img = Image.fromarray(cv2.cvtColor(frame, cv2.COLOR_BGR2RGB))
             imgtk = ImageTk.PhotoImage(image=img)
-            self.video_labels[idx].imgtk = imgtk
-            self.video_labels[idx].configure(image=imgtk)
-            self.after_ids[idx] = self.video_labels[idx].after(40, update_frame)
+            label.imgtk = imgtk
+            label.configure(image=imgtk)
+            self.after_ids[idx] = label.after(40, update_frame)
         update_frame()
 
     def update_lines_status(self, status):
