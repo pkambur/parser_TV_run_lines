@@ -8,10 +8,16 @@ from datetime import datetime
 import cv2
 import numpy as np
 from utils import setup_logging
+from auto_recorder import record_channel  # Импортируем функцию записи всего потока
 
 logger = logging.getLogger(__name__)
 base_dir = os.path.abspath("video")  # Абсолютный путь для надежности
-VIDEO_DURATION = 120  # Для тестов 20 секунд, для продакшена можно увеличить до 240
+LINES_VIDEO_ROOT = os.path.abspath("lines_video")  # Для crop-роликов
+VIDEO_DURATION = 120  # Для тестов 120 секунд, для продакшена можно увеличить до 240
+
+def get_current_time_str():
+    """Возвращает текущее время в формате HH:MM"""
+    return datetime.now().strftime("%H:%M")
 
 def load_channels():
     try:
@@ -225,8 +231,30 @@ async def record_video_opencv(channel_name, stream_url, output_path, crop_params
         except:
             pass
 
-async def process_rbk_mir24(app, ui, send_files=False, channels=None):
-    logger.info("Запуск записи видеопотоков")
+async def record_lines_video(channel_name, channel_info, duration=VIDEO_DURATION):
+    """Записывает crop-ролик в lines_video/<channel>/"""
+    try:
+        output_dir = os.path.join(LINES_VIDEO_ROOT, channel_name)
+        os.makedirs(output_dir, exist_ok=True)
+        timestamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
+        output_path = os.path.join(output_dir, f"{channel_name}_lines_{timestamp}.mp4")
+
+        # Проверка доступности URL
+        if not await check_url_accessible(channel_info["url"]):
+            logger.error(f"Прерывание записи для {channel_name}: URL недоступен")
+            return
+
+        # Проверка разрешения видео
+        resolution = await check_video_resolution(channel_info["url"])
+        crop_filter = await validate_crop_params(channel_name, channel_info, resolution)
+
+        await record_video_opencv(channel_name, channel_info["url"], output_path, crop_filter, duration)
+        logger.info(f"Crop-видео для {channel_name} сохранено: {output_path}")
+    except Exception as e:
+        logger.error(f"Ошибка при записи crop-видео для {channel_name}: {e}")
+
+async def process_rbk_mir24(app, ui, send_files=False, channels=None, force_crop=False):
+    logger.info("Запуск записи видеопотоков (с учётом lines/schedule)")
     if ui.root.winfo_exists():
         ui.update_status("Запуск записи...")
         ui.update_rbk_mir24_status("Запущен")
@@ -243,14 +271,10 @@ async def process_rbk_mir24(app, ui, send_files=False, channels=None):
                 ui.update_rbk_mir24_status("Ошибка")
             return
 
-        # Список каналов для видео
         video_channels = ['RBK', 'MIR24', 'RenTV', 'NTV', 'TVC']
-
-        # Если каналы не указаны, используем все каналы для видео
         if channels is None:
             channels = video_channels
         else:
-            # Фильтруем только каналы для видео
             channels = [ch for ch in channels if ch in video_channels]
             if not channels:
                 logger.warning("Нет каналов для записи видео")
@@ -258,23 +282,49 @@ async def process_rbk_mir24(app, ui, send_files=False, channels=None):
                     ui.update_status("Нет каналов для записи видео")
                     ui.update_rbk_mir24_status("Ошибка")
                 return
-        
+
+        now_str = get_current_time_str()
+        logger.info(f"Текущее время: {now_str}")
+
         for name in channels:
-            if name in channels_data:
-                logger.info(f"Создание задачи для {name}")
-                task = asyncio.create_task(record_video(name, channels_data[name], process_list))
-                record_tasks.append(task)
-            else:
+            if name not in channels_data:
                 logger.warning(f"Канал {name} отсутствует в channels.json")
                 if ui.root.winfo_exists():
                     ui.update_status(f"Ошибка: Канал {name} отсутствует в channels.json")
                     ui.update_rbk_mir24_status("Ошибка")
+                continue
+            info = channels_data[name]
+            lines_times = set(info.get("lines", []))
+            schedule_times = set(info.get("schedule", []))
 
-        # Проверяем выполнение задач
-        done, pending = await asyncio.wait(record_tasks, return_exceptions=True)
-        for task in done:
-            if task.exception():
-                logger.error(f"Задача записи завершилась с ошибкой: {task.exception()}")
+            if force_crop:
+                logger.info(f"{name}: ручной запуск — всегда запись crop-ролика (lines_video)")
+                task = asyncio.create_task(record_lines_video(name, info, VIDEO_DURATION))
+                record_tasks.append(task)
+            else:
+                # Если время есть и там, и там, то приоритет у schedule (т.е. пишем полный поток)
+                if now_str in schedule_times:
+                    logger.info(f"{name}: {now_str} найдено в schedule — запись полного потока (TV_video)")
+                    url = info.get("url")
+                    if url:
+                        loop = asyncio.get_event_loop()
+                        loop.run_in_executor(None, record_channel, name, url)
+                    else:
+                        logger.warning(f"URL не найден для {name}")
+                elif now_str in lines_times:
+                    logger.info(f"{name}: {now_str} найдено в lines — запись crop-ролика (lines_video)")
+                    task = asyncio.create_task(record_lines_video(name, info, VIDEO_DURATION))
+                    record_tasks.append(task)
+                else:
+                    logger.info(f"{name}: {now_str} не найдено ни в lines, ни в schedule — пропуск")
+
+        if record_tasks:
+            done, pending = await asyncio.wait(record_tasks, return_exceptions=True)
+            for task in done:
+                if isinstance(task, Exception):
+                    logger.error(f"Задача записи завершилась с ошибкой: {task}")
+                elif hasattr(task, 'exception') and task.exception():
+                    logger.error(f"Задача записи завершилась с ошибкой: {task.exception()}")
 
         if ui.root.winfo_exists():
             ui.update_status("Запись завершена")
@@ -286,11 +336,6 @@ async def process_rbk_mir24(app, ui, send_files=False, channels=None):
         for task in record_tasks:
             task.cancel()
         await asyncio.gather(*record_tasks, return_exceptions=True)
-
-        for proc in process_list:
-            proc.kill()
-            await proc.wait()
-
         process_list.clear()
         if ui.root.winfo_exists():
             ui.update_status("Запись остановлена")

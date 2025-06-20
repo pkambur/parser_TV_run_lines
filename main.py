@@ -87,44 +87,33 @@ class MonitoringApp:
             logger.info("Планировщик задач запущен")
 
     def _run_scheduler(self):
-        """Выполнение планировщика задач."""
         logger.info("Настройка расписания задач...")
         self.ui.update_scheduler_status("Настройка расписания...")
-        
-        # Настройка расписания для R1
-        for hour in range(5, 10):
-            for minute in [0, 30]:
-                time_str = f"{hour:02d}:{minute:02d}"
-                schedule.every().day.at(time_str).do(self._start_r1_monitoring)
-                logger.info(f"Добавлено расписание для R1: {time_str}")
 
-        # Настройка расписания для Zvezda
-        for time_str in ["09:00", "13:00", "17:00", "19:00"]:
-            schedule.every().day.at(time_str).do(self._start_zvezda_monitoring)
-            logger.info(f"Добавлено расписание для Zvezda: {time_str}")
+        # Загрузка расписания из channels.json
+        with open("channels.json", "r", encoding="utf-8") as f:
+            channels = json.load(f)
 
-        # Настройка расписания для остальных каналов
-        schedule.every(20).minutes.do(self._start_other_channels_monitoring)
-        logger.info("Добавлено расписание для остальных каналов: каждые 20 минут")
+        # Сопоставление каналов с методами запуска
+        channel_methods = {
+            "R1": self._start_r1_monitoring,
+            "Zvezda": self._start_zvezda_monitoring,
+            "TVC": self._start_tvc_monitoring,
+            "RenTV": self._start_rentv_monitoring,
+            "NTV": self._start_ntv_monitoring,
+            "RBK": self._start_rbk_mir24_monitoring,
+            "MIR24": self._start_rbk_mir24_monitoring,
+        }
 
-        # Настройка расписания для RBK и MIR24
-        schedule.every(20).minutes.do(self._start_rbk_mir24_monitoring)
-        logger.info("Добавлено расписание для RBK и MIR24: каждые 20 минут")
-
-        # Настройка расписания для RenTV
-        for time_str in ["08:30", "12:30", "16:30", "19:30", "23:00"]:
-            schedule.every().day.at(time_str).do(self._start_rentv_monitoring)
-            logger.info(f"Добавлено расписание для RenTV: {time_str}")
-
-        # Настройка расписания для NTV
-        for time_str in ["08:00", "10:00", "13:00", "16:00", "19:00"]:
-            schedule.every().day.at(time_str).do(self._start_ntv_monitoring)
-            logger.info(f"Добавлено расписание для NTV: {time_str}")
-
-        # Настройка расписания для TVC
-        for time_str in ["11:30", "14:30", "17:50", "22:00"]:
-            schedule.every().day.at(time_str).do(self._start_tvc_monitoring)
-            logger.info(f"Добавлено расписание для TVC: {time_str}")
+        for channel, info in channels.items():
+            times = info.get("lines", [])
+            if not times:
+                continue
+            method = channel_methods.get(channel)
+            if method:
+                for t in times:
+                    schedule.every().day.at(t).do(method)
+                    logger.info(f"Добавлено расписание для {channel}: {t}")
 
         # Настройка отправки ежедневного файла в Telegram
         schedule.every().day.at("22:00").do(self._send_daily_file_to_telegram)
@@ -284,29 +273,52 @@ class MonitoringApp:
             messagebox.showwarning("Предупреждение", "Мониторинг строк уже остановлен")
 
     def start_rbk_mir24(self):
-        """Запуск мониторинга RBK и MIR24."""
-        if not self.rbk_mir24_running and self.loop is not None:
-            try:
-                self.rbk_mir24_running = True
-                self.process_list.clear()
-                self.ui.update_status("Запуск записи RBK и MIR24...")
-                
-                # Запускаем запись
-                self.rbk_mir24_task = asyncio.run_coroutine_threadsafe(
-                    process_rbk_mir24(self, self.ui, True),
-                    self.loop
+        """Запуск мониторинга RBK и MIR24 (ручной запуск)."""
+        try:
+            from rbk_mir24_parser import get_current_time_str, load_channels, process_rbk_mir24
+            now_str = get_current_time_str()
+            channels_data = load_channels()
+            video_channels = ['RBK', 'MIR24', 'RenTV', 'NTV', 'TVC']
+            channels_in_schedule = []
+            channels_in_lines = []
+            for name in video_channels:
+                info = channels_data.get(name)
+                if not info:
+                    continue
+                schedule_times = set(info.get("schedule", []))
+                lines_times = set(info.get("lines", []))
+                if now_str in schedule_times:
+                    channels_in_schedule.append(name)
+                if now_str in lines_times:
+                    channels_in_lines.append(name)
+            if channels_in_schedule:
+                import tkinter
+                messagebox.showwarning(
+                    "Выпуск новостей",
+                    f"Уже идет запись Выпуска новостей на телеканале(ах): {', '.join(channels_in_schedule)}"
                 )
-                
-                self.ui.update_rbk_mir24_status("Запущен")
-                logger.info("Запущен мониторинг RBK и MIR24")
-            except Exception as e:
-                self.rbk_mir24_running = False
-                self.ui.update_rbk_mir24_status("Ошибка")
-                self.ui.update_status(f"Ошибка запуска записи: {str(e)}")
-                logger.error(f"Ошибка при запуске записи RBK и MIR24: {e}")
-                messagebox.showerror("Ошибка", f"Не удалось запустить запись: {str(e)}")
-        else:
-            messagebox.showwarning("Предупреждение", "Мониторинг RBK и MIR24 уже запущен или event loop не инициализирован")
+                return
+            if channels_in_lines:
+                import tkinter
+                messagebox.showwarning(
+                    "Бегущие строки",
+                    "Бегущие строки уже записываются"
+                )
+                return
+            # Если нет совпадений с schedule или lines, всегда запускаем crop-запись
+            self.process_list.clear()
+            self.ui.update_status("Запуск записи RBK и MIR24 (crop)...")
+            self.rbk_mir24_task = asyncio.run_coroutine_threadsafe(
+                process_rbk_mir24(self, self.ui, True, channels=video_channels, force_crop=True),
+                self.loop
+            )
+            self.ui.update_rbk_mir24_status("Запущен")
+            logger.info("Запущен мониторинг RBK и MIR24 (crop)")
+        except Exception as e:
+            self.ui.update_rbk_mir24_status("Ошибка")
+            self.ui.update_status(f"Ошибка запуска записи: {str(e)}")
+            logger.error(f"Ошибка при запуске записи RBK и MIR24: {e}")
+            messagebox.showerror("Ошибка", f"Не удалось запустить запись: {str(e)}")
 
     def stop_rbk_mir24(self):
         """Остановка мониторинга RBK и MIR24."""
@@ -441,16 +453,9 @@ class MonitoringApp:
                     # Отправляем скриншоты и Excel в Telegram
                     self.ui.update_processing_status("Отправка скриншотов и Excel...")
                     from telegram_sender import send_files
-                    
-                    # Создаем новый event loop для отправки
-                    loop = asyncio.new_event_loop()
-                    asyncio.set_event_loop(loop)
-                    try:
-                        loop.run_until_complete(send_files(excel_path, screenshot_files))
-                        self.ui.update_processing_status("Скриншоты и Excel отправлены")
-                        files_sent = True
-                    finally:
-                        loop.close()
+                    send_files(excel_path, screenshot_files)
+                    self.ui.update_processing_status("Скриншоты и Excel отправлены")
+                    files_sent = True
                 else:
                     logger.info("Нет Excel файла для отправки")
             else:

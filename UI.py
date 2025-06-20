@@ -300,7 +300,7 @@ class MonitoringUI:
         import os
         settings_win = tk.Toplevel(self.root)
         settings_win.title("Настройки телеканалов")
-        settings_win.geometry("500x350")
+        settings_win.geometry("600x600")
         settings_win.transient(self.root)
         settings_win.grab_set()
 
@@ -343,6 +343,16 @@ class MonitoringUI:
         interval_entry = tk.Entry(settings_win, textvariable=interval_var)
         interval_entry.pack(fill="x", padx=20)
 
+        # Schedule (видео)
+        tk.Label(settings_win, text="Время записи видео (schedule, через запятую или с новой строки):").pack(pady=(10,0))
+        schedule_text = tk.Text(settings_win, height=3)
+        schedule_text.pack(fill="x", padx=20)
+
+        # Lines (мониторинг строк)
+        tk.Label(settings_win, text="Время мониторинга строк (lines, через запятую или с новой строки):").pack(pady=(10,0))
+        lines_text = tk.Text(settings_win, height=3)
+        lines_text.pack(fill="x", padx=20)
+
         def fill_fields(event=None):
             ch = channel_var.get()
             if ch in channels:
@@ -350,26 +360,50 @@ class MonitoringUI:
                 url_var.set(channels[ch].get('url', ''))
                 crop_var.set(channels[ch].get('crop', ''))
                 interval_var.set(channels[ch].get('interval', ''))
+                # schedule
+                schedule_val = channels[ch].get('schedule', [])
+                schedule_text.delete('1.0', tk.END)
+                if schedule_val:
+                    schedule_text.insert(tk.END, ', '.join(schedule_val))
+                # lines
+                lines_val = channels[ch].get('lines', [])
+                lines_text.delete('1.0', tk.END)
+                if lines_val:
+                    lines_text.insert(tk.END, ', '.join(lines_val))
             else:
                 name_var.set(ch)
                 url_var.set('')
                 crop_var.set('')
                 interval_var.set('')
+                schedule_text.delete('1.0', tk.END)
+                lines_text.delete('1.0', tk.END)
         channel_combo.bind("<<ComboboxSelected>>", fill_fields)
         channel_combo.bind("<KeyRelease>", fill_fields)
+
+        def parse_time_list(text_widget):
+            raw = text_widget.get('1.0', tk.END).strip()
+            if not raw:
+                return []
+            # Разделить по запятым и/или переводам строк
+            items = [item.strip() for part in raw.split('\n') for item in part.split(',')]
+            return [item for item in items if item]
 
         def save_channel():
             ch_name = name_var.get().strip()
             url = url_var.get().strip()
             crop = crop_var.get().strip()
             interval = interval_var.get().strip()
+            schedule_list = parse_time_list(schedule_text)
+            lines_list = parse_time_list(lines_text)
             if not ch_name or not url:
                 tk.messagebox.showerror("Ошибка", "Название и ссылка обязательны!")
                 return
             channels[ch_name] = {
                 'url': url,
                 'crop': crop,
-                'interval': interval
+                'interval': interval,
+                'schedule': schedule_list,
+                'lines': lines_list
             }
             try:
                 with open('channels.json', 'w', encoding='utf-8') as f:
