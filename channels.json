@@ -11,8 +11,8 @@
     },
     "Zvezda": {
         "url": "https://tvzvezda.bonus-tv.ru/cdn/tvzvezda/playlist.m3u8",
-        "interval": "1/12",
-        "crop": "crop=1610:60:570:970"
+        "crop": "crop=1410:60:570:970",
+        "interval": "1/12"
     },
     "MIR24": {
         "url": "https://hls-mirtv.cdnvideo.ru/mirtv-parampublish/mir24_2500/tracks-v1a1/mono.m3u8",

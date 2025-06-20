@@ -58,6 +58,10 @@ class MonitoringUI:
         # Вся панель управления (кнопки и статусы)
         self._create_sidebar_content()
 
+        # Кнопка настроек в левом нижнем углу основного окна
+        self.settings_btn = tk.Button(self.root, text="Настройки", command=self.open_settings_window)
+        self.settings_btn.place(relx=0.01, rely=0.97, anchor="sw")
+
     def _create_sidebar_content(self):
         scheduler_frame = ttk.LabelFrame(self.sidebar, text="Статус планировщика", padding=10)
         scheduler_frame.pack(fill="x", padx=10, pady=5)
@@ -201,22 +205,24 @@ class MonitoringUI:
         self.captures[idx] = cap = cv2.VideoCapture(url)
         def update_frame():
             if cap is None or not cap.isOpened():
-                frame = np.zeros((240, 400, 3), dtype=np.uint8)
+                frame = np.zeros((120, 200, 3), dtype=np.uint8)
             else:
                 ret, frame = cap.read()
                 if not ret or frame is None:
-                    frame = np.zeros((240, 400, 3), dtype=np.uint8)
+                    frame = np.zeros((120, 200, 3), dtype=np.uint8)
             label = self.video_labels[idx]
             w = label.winfo_width()
             h = label.winfo_height()
-            if w < 10 or h < 10:
-                w, h = 400, 225
+            # Минимальный размер для экономии ресурсов
+            min_w, min_h = 200, 120
+            if w < min_w or h < min_h:
+                w, h = min_w, min_h
             frame = cv2.resize(frame, (w, h))
             img = Image.fromarray(cv2.cvtColor(frame, cv2.COLOR_BGR2RGB))
             imgtk = ImageTk.PhotoImage(image=img)
             label.imgtk = imgtk
             label.configure(image=imgtk)
-            self.after_ids[idx] = label.after(40, update_frame)
+            self.after_ids[idx] = label.after(33, update_frame)  # ~30 fps
         update_frame()
 
     def update_lines_status(self, status):
@@ -286,3 +292,95 @@ class MonitoringUI:
                 logger.info("Окно Tkinter успешно закрыто")
         except Exception as e:
             logger.error(f"Ошибка при закрытии окна Tkinter: {e}")
+
+    def open_settings_window(self):
+        import json
+        import os
+        settings_win = tk.Toplevel(self.root)
+        settings_win.title("Настройки телеканалов")
+        settings_win.geometry("500x350")
+        settings_win.transient(self.root)
+        settings_win.grab_set()
+
+        # Загрузка каналов
+        try:
+            with open('channels.json', 'r', encoding='utf-8') as f:
+                channels = json.load(f)
+        except Exception:
+            channels = {}
+
+        channel_names = list(channels.keys())
+
+        # Выбор канала или добавление нового
+        tk.Label(settings_win, text="Выберите канал или добавьте новый:").pack(pady=5)
+        channel_var = tk.StringVar()
+        channel_combo = ttk.Combobox(settings_win, values=channel_names, textvariable=channel_var, state="normal")
+        channel_combo.pack(fill="x", padx=20)
+
+        # Название
+        tk.Label(settings_win, text="Название телеканала:").pack(pady=(10,0))
+        name_var = tk.StringVar()
+        name_entry = tk.Entry(settings_win, textvariable=name_var)
+        name_entry.pack(fill="x", padx=20)
+
+        # Ссылка
+        tk.Label(settings_win, text="Ссылка на видеопоток:").pack(pady=(10,0))
+        url_var = tk.StringVar()
+        url_entry = tk.Entry(settings_win, textvariable=url_var)
+        url_entry.pack(fill="x", padx=20)
+
+        # Crop
+        tk.Label(settings_win, text="Параметры обрезки (crop=width:height:x:y):").pack(pady=(10,0))
+        crop_var = tk.StringVar()
+        crop_entry = tk.Entry(settings_win, textvariable=crop_var)
+        crop_entry.pack(fill="x", padx=20)
+
+        # Интервал
+        tk.Label(settings_win, text="Интервал (например, 1/7):").pack(pady=(10,0))
+        interval_var = tk.StringVar()
+        interval_entry = tk.Entry(settings_win, textvariable=interval_var)
+        interval_entry.pack(fill="x", padx=20)
+
+        def fill_fields(event=None):
+            ch = channel_var.get()
+            if ch in channels:
+                name_var.set(ch)
+                url_var.set(channels[ch].get('url', ''))
+                crop_var.set(channels[ch].get('crop', ''))
+                interval_var.set(channels[ch].get('interval', ''))
+            else:
+                name_var.set(ch)
+                url_var.set('')
+                crop_var.set('')
+                interval_var.set('')
+        channel_combo.bind("<<ComboboxSelected>>", fill_fields)
+        channel_combo.bind("<KeyRelease>", fill_fields)
+
+        def save_channel():
+            ch_name = name_var.get().strip()
+            url = url_var.get().strip()
+            crop = crop_var.get().strip()
+            interval = interval_var.get().strip()
+            if not ch_name or not url:
+                tk.messagebox.showerror("Ошибка", "Название и ссылка обязательны!")
+                return
+            channels[ch_name] = {
+                'url': url,
+                'crop': crop,
+                'interval': interval
+            }
+            try:
+                with open('channels.json', 'w', encoding='utf-8') as f:
+                    json.dump(channels, f, ensure_ascii=False, indent=4)
+                tk.messagebox.showinfo("Успех", f"Канал '{ch_name}' сохранён.")
+                settings_win.destroy()
+                # Обновить список каналов в основном окне
+                self.channels = channels
+                self.channel_names = list(channels.keys())
+                for combo in self.comboboxes:
+                    combo['values'] = self.channel_names
+            except Exception as e:
+                tk.messagebox.showerror("Ошибка", f"Не удалось сохранить: {e}")
+
+        save_btn = tk.Button(settings_win, text="Сохранить", command=save_channel)
+        save_btn.pack(pady=15)
