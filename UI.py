@@ -52,19 +52,21 @@ class MonitoringUI:
         self._create_video_grid()
 
         # Кнопка скрытия/открытия sidebar (всегда поверх main_area)
-        self.toggle_btn = tk.Button(self.root, text="≡", command=self.toggle_sidebar, width=2)
+        self.toggle_btn = tk.Button(self.root, text="≡", command=self.toggle_sidebar, width=2, height=1)
         self.toggle_btn.place(x=0, y=0)
 
         # Вся панель управления (кнопки и статусы)
         self._create_sidebar_content()
 
-        # Кнопка настроек в левом нижнем углу основного окна
-        self.settings_btn = tk.Button(self.root, text="Настройки", command=self.open_settings_window)
+        # Кнопка настроек в левом нижнем углу основного окна (теперь шестерёнка, такого же размера как ≡)
+        self.settings_btn = tk.Button(self.root, text="⚙️", command=self.open_settings_window, width=2, height=1)
         self.settings_btn.place(relx=0.01, rely=0.97, anchor="sw")
+        # Tooltip для кнопки
+        self._add_tooltip(self.settings_btn, "Настройки телеканалов")
 
     def _create_sidebar_content(self):
         scheduler_frame = ttk.LabelFrame(self.sidebar, text="Статус планировщика", padding=10)
-        scheduler_frame.pack(fill="x", padx=10, pady=5)
+        scheduler_frame.pack(fill="x", padx=(30,10), pady=5)
         self.scheduler_status = ttk.Label(scheduler_frame, text="Планировщик: Активен")
         self.scheduler_status.pack(fill="x", pady=5)
 
@@ -384,3 +386,20 @@ class MonitoringUI:
 
         save_btn = tk.Button(settings_win, text="Сохранить", command=save_channel)
         save_btn.pack(pady=15)
+
+    def _add_tooltip(self, widget, text):
+        # Простой tooltip для Tkinter
+        def on_enter(event):
+            self.tooltip = tk.Toplevel(widget)
+            self.tooltip.wm_overrideredirect(True)
+            x = widget.winfo_rootx() + 30
+            y = widget.winfo_rooty() - 10
+            self.tooltip.wm_geometry(f"+{x}+{y}")
+            label = tk.Label(self.tooltip, text=text, background="#ffffe0", relief="solid", borderwidth=1, font=("Arial", 10))
+            label.pack()
+        def on_leave(event):
+            if hasattr(self, 'tooltip') and self.tooltip:
+                self.tooltip.destroy()
+                self.tooltip = None
+        widget.bind("<Enter>", on_enter)
+        widget.bind("<Leave>", on_leave)
