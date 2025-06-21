@@ -50,6 +50,9 @@ class MonitoringApp:
         self.running = False
         self.scheduler_thread = None
         self.scheduler_running = False
+        self.scheduler_paused = False
+        self.start_time = time_module.time()
+        self.last_lines_activity_time = self.start_time
 
         self.rbk_mir24_task = None
         self.rbk_mir24_running = False
@@ -163,7 +166,12 @@ class MonitoringApp:
         self.ui.update_scheduler_status("Активен")
         while self.scheduler_running:
             try:
-                schedule.run_pending()
+                if not self.scheduler_paused:
+                    schedule.run_pending()
+                
+                # Проверка неактивности мониторинга строк
+                self._check_and_start_idle_monitoring()
+
                 time_module.sleep(1)
             except Exception as e:
                 logger.error(f"Ошибка в планировщике: {e}")
@@ -176,6 +184,7 @@ class MonitoringApp:
         if not self.lines_monitoring_running:
             try:
                 self.lines_monitoring_running = True
+                self.last_lines_activity_time = time_module.time()
                 start_force_capture()
                 self.lines_monitoring_thread = threading.Thread(
                     target=start_lines_monitoring,
@@ -211,6 +220,7 @@ class MonitoringApp:
         if not self.lines_monitoring_running:
             try:
                 self.lines_monitoring_running = True
+                self.last_lines_activity_time = time_module.time()
                 start_force_capture()
                 self.lines_monitoring_thread = threading.Thread(
                     target=start_lines_monitoring,
@@ -246,6 +256,7 @@ class MonitoringApp:
         if not self.lines_monitoring_running:
             try:
                 self.lines_monitoring_running = True
+                self.last_lines_activity_time = time_module.time()
                 start_force_capture()
                 self.lines_monitoring_thread = threading.Thread(
                     target=start_lines_monitoring,
@@ -280,6 +291,7 @@ class MonitoringApp:
         if not self.lines_monitoring_running:
             try:
                 self.lines_monitoring_running = True
+                self.last_lines_activity_time = time_module.time()
                 start_force_capture()
                 self.lines_monitoring_thread = threading.Thread(
                     target=start_lines_monitoring,
@@ -835,6 +847,32 @@ class MonitoringApp:
             
         except Exception as e:
             logger.error(f"Ошибка при очистке ресурсов: {e}")
+
+    def pause_scheduler(self):
+        """Приостановка выполнения задач по расписанию."""
+        if not self.scheduler_paused:
+            self.scheduler_paused = True
+            logger.info("Планировщик приостановлен.")
+            self.ui.update_scheduler_status("Приостановлен")
+            self.ui.toggle_scheduler_buttons(paused=True)
+
+    def resume_scheduler(self):
+        """Возобновление выполнения задач по расписанию."""
+        if self.scheduler_paused:
+            self.scheduler_paused = False
+            logger.info("Планировщик возобновлен.")
+            self.ui.update_scheduler_status("Активен")
+            self.ui.toggle_scheduler_buttons(paused=False)
+
+    def _check_and_start_idle_monitoring(self):
+        """Проверяет время неактивности и запускает мониторинг, если нужно."""
+        if self.lines_monitoring_running or self.scheduler_paused:
+            return
+
+        idle_timeout = 15 * 60  # 15 минут
+        if time_module.time() - self.last_lines_activity_time > idle_timeout:
+            logger.info(f"Не было активности мониторинга строк более {idle_timeout / 60:.0f} минут. Запускаю стандартный сеанс мониторинга.")
+            self._start_other_channels_monitoring()
 
 class StatusHandler(BaseHTTPRequestHandler):
     def __init__(self, ui_instance, *args, **kwargs):

@@ -75,6 +75,13 @@ class MonitoringUI:
         self.auto_recorder_status = ttk.Label(scheduler_frame, text="Авто-рекордер сюжетов: Ожидание")
         self.auto_recorder_status.pack(fill="x", pady=5)
         
+        scheduler_btn_frame = ttk.Frame(scheduler_frame)
+        scheduler_btn_frame.pack(fill="x", pady=5)
+        self.pause_scheduler_button = ttk.Button(scheduler_btn_frame, text="Приостановить", command=self.app.pause_scheduler)
+        self.pause_scheduler_button.pack(side="left", expand=True, fill="x", padx=(0, 2))
+        self.resume_scheduler_button = ttk.Button(scheduler_btn_frame, text="Возобновить", command=self.app.resume_scheduler, state="disabled")
+        self.resume_scheduler_button.pack(side="left", expand=True, fill="x", padx=(2, 0))
+        
         lines_frame = ttk.LabelFrame(self.sidebar, text="Мониторинг строк", padding=10)
         lines_frame.pack(fill="x", padx=10, pady=5)
         self.lines_status = ttk.Label(lines_frame, text="Состояние: Остановлен")
@@ -582,3 +589,12 @@ class MonitoringUI:
                 color = "red" if is_recording else "#444"
                 if self.grid_cells[idx]:
                     self.grid_cells[idx].config(highlightbackground=color, highlightcolor=color)
+
+    def toggle_scheduler_buttons(self, paused: bool):
+        """Переключение состояния кнопок паузы/возобновления планировщика."""
+        if paused:
+            self.pause_scheduler_button.config(state="disabled")
+            self.resume_scheduler_button.config(state="normal")
+        else:
+            self.pause_scheduler_button.config(state="normal")
+            self.resume_scheduler_button.config(state="disabled")
