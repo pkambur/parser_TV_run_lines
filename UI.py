@@ -30,12 +30,15 @@ class MonitoringUI:
         self.channel_names = list(self.channels.keys())
         self.sidebar_visible = True
         self.selected_channels = [self.channel_names[i % len(self.channel_names)] for i in range(4)]
+        self.recording_status = {name: False for name in self.channel_names}
         self.video_labels = []
         self.comboboxes = []
         self.captures = [None]*4
         self.after_ids = [None]*4
+        self.play_pause_buttons = []
+        self.video_stream_active = [True]*4
         self.create_widgets()
-
+        
     def create_widgets(self):
         # Основной контейнер
         self.container = tk.Frame(self.root)
@@ -58,9 +61,9 @@ class MonitoringUI:
         # Вся панель управления (кнопки и статусы)
         self._create_sidebar_content()
 
-        # Кнопка настроек в левом нижнем углу основного окна (теперь шестерёнка, такого же размера как ≡)
+        # Кнопка настроек под кнопкой "≡"
         self.settings_btn = tk.Button(self.root, text="⚙️", command=self.open_settings_window, width=2, height=1)
-        self.settings_btn.place(relx=0.01, rely=0.97, anchor="sw")
+        self.settings_btn.place(x=0, y=30)
         # Tooltip для кнопки
         self._add_tooltip(self.settings_btn, "Настройки телеканалов")
 
@@ -69,7 +72,9 @@ class MonitoringUI:
         scheduler_frame.pack(fill="x", padx=(30,10), pady=5)
         self.scheduler_status = ttk.Label(scheduler_frame, text="Планировщик: Активен")
         self.scheduler_status.pack(fill="x", pady=5)
-
+        self.auto_recorder_status = ttk.Label(scheduler_frame, text="Авто-рекордер сюжетов: Ожидание")
+        self.auto_recorder_status.pack(fill="x", pady=5)
+        
         lines_frame = ttk.LabelFrame(self.sidebar, text="Мониторинг строк", padding=10)
         lines_frame.pack(fill="x", padx=10, pady=5)
         self.lines_status = ttk.Label(lines_frame, text="Состояние: Остановлен")
@@ -81,6 +86,8 @@ class MonitoringUI:
         self.start_lines_button.pack(fill="x", pady=2)
         self.stop_lines_button = ttk.Button(lines_frame, text="Остановить мониторинг", command=self.app.stop_lines_monitoring, state="disabled")
         self.stop_lines_button.pack(fill="x", pady=2)
+        self.save_and_send_lines_button = ttk.Button(lines_frame, text="Сохранить и отправить строки", command=self.app.save_and_send_lines)
+        self.save_and_send_lines_button.pack(fill="x", pady=2)
 
         rbk_mir24_frame = ttk.LabelFrame(self.sidebar, text="RBK и MIR24", padding=10)
         rbk_mir24_frame.pack(fill="x", padx=10, pady=5)
@@ -93,26 +100,16 @@ class MonitoringUI:
         self.start_rbk_mir24_button.pack(fill="x", pady=2)
         self.stop_rbk_mir24_button = ttk.Button(rbk_mir24_frame, text="Остановить запись", command=self.app.stop_rbk_mir24, state="disabled")
         self.stop_rbk_mir24_button.pack(fill="x", pady=2)
-        self.check_video_button = ttk.Button(rbk_mir24_frame, text="Проверка видео", command=self.app.start_video_recognition)
-        self.check_video_button.pack(fill="x", pady=2)
-        self.stop_video_check_button = ttk.Button(rbk_mir24_frame, text="Остановить проверку", command=self.app.stop_video_recognition, state="disabled")
-        self.stop_video_check_button.pack(fill="x", pady=2)
+        self.check_and_send_video_button = ttk.Button(rbk_mir24_frame, text="Проверить и отправить видео", command=self.app.check_and_send_videos)
+        self.check_and_send_video_button.pack(fill="x", pady=2)
         self.video_check_status = ttk.Label(rbk_mir24_frame, text="Статус проверки: Ожидание")
         self.video_check_status.pack(fill="x", pady=5)
-        self.send_video_tg_button = ttk.Button(rbk_mir24_frame, text="Отправить в ТГ", command=self.app.send_video_to_telegram)
-        self.send_video_tg_button.pack(fill="x", pady=2)
-
+        
         processing_frame = ttk.LabelFrame(self.sidebar, text="Обработка файлов", padding=10)
         processing_frame.pack(fill="x", padx=10, pady=5)
         self.processing_status = ttk.Label(processing_frame, text="Статус обработки: Ожидание")
         self.processing_status.pack(fill="x", pady=5)
-
-        # Кнопки сохранения и отправки в одну колонну
-        self.save_lines_button = ttk.Button(self.sidebar, text="Сохранить строки", command=self.app.start_save_to_csv)
-        self.save_lines_button.pack(fill="x", padx=10, pady=2)
-        self.send_lines_button = ttk.Button(self.sidebar, text="Отправить строки в ТГ", command=self.app.send_to_telegram)
-        self.send_lines_button.pack(fill="x", padx=10, pady=2)
-
+        
         self.status_label = ttk.Label(self.sidebar, text="Готов к работе")
         self.status_label.pack(side="bottom", fill="x", padx=10, pady=5)
 
@@ -122,11 +119,12 @@ class MonitoringUI:
         self.video_labels = []
         self.comboboxes = []
         self.grid_cells = []
+        self.play_pause_buttons = []
         for i in range(2):
             for j in range(2):
                 idx = i*2 + j
                 # Основной cell для видео
-                cell = tk.Frame(grid, bg="#111", bd=2, relief="groove")
+                cell = tk.Frame(grid, bg="#111", highlightbackground="#444", highlightcolor="#444", highlightthickness=2, relief="groove")
                 cell.grid(row=i*2, column=j, padx=20, pady=(20, 2), sticky="nsew")
                 grid.grid_rowconfigure(i*2, weight=3)
                 grid.grid_columnconfigure(j, weight=1)
@@ -134,15 +132,23 @@ class MonitoringUI:
                 video_label.pack(expand=True, fill="both")
                 self.video_labels.append(video_label)
                 self.grid_cells.append(cell)
-                # Отдельный frame для Combobox
-                combo_cell = tk.Frame(grid, bg="#222", height=40, width=200)
-                combo_cell.grid(row=i*2+1, column=j, padx=20, pady=(0, 20), sticky="nsew")
-                grid.grid_rowconfigure(i*2+1, weight=1)
-                combo = ttk.Combobox(combo_cell, values=self.channel_names, state="readonly", width=24)
+
+                # Frame для контролов (комбобокс и кнопка)
+                control_frame = tk.Frame(grid, bg="#222")
+                control_frame.grid(row=i*2+1, column=j, padx=20, pady=(0, 20), sticky="ew")
+
+                # Combobox
+                combo = ttk.Combobox(control_frame, values=self.channel_names, state="readonly")
                 combo.set(self.selected_channels[idx])
-                combo.pack(expand=True, fill="x", pady=5)
+                combo.pack(side="left", expand=True, fill="x", pady=5)
                 combo.bind("<<ComboboxSelected>>", lambda e, k=idx: self.on_channel_change(k))
                 self.comboboxes.append(combo)
+
+                # Play/Pause кнопка
+                play_pause_button = ttk.Button(control_frame, text="❚❚", command=lambda k=idx: self.toggle_video_stream(k))
+                play_pause_button.pack(side="left", padx=5, pady=5)
+                self.play_pause_buttons.append(play_pause_button)
+
         self.main_area.bind("<Configure>", self._on_resize)
         for idx in range(4):
             self.start_video_stream(idx)
@@ -183,6 +189,68 @@ class MonitoringUI:
             self.main_area.pack(side="left", fill="both", expand=True)
             self.sidebar_visible = True
 
+    def _handle_disconnect(self, idx):
+        """Обработка обрыва соединения для видеопотока."""
+        # Останавливаем текущий захват, если он есть
+        if self.captures[idx] is not None:
+            self.captures[idx].release()
+            self.captures[idx] = None
+        if self.after_ids[idx] is not None:
+            self.video_labels[idx].after_cancel(self.after_ids[idx])
+            self.after_ids[idx] = None
+
+        # Показываем сообщение об обрыве
+        label = self.video_labels[idx]
+        w = label.winfo_width()
+        h = label.winfo_height()
+        if w < 10 or h < 10: w, h = 400, 225
+        frame = np.full((h, w, 3), 64, dtype=np.uint8)  # Серый фон
+        text = "Disconnected. Reconnecting..."
+        (text_width, text_height), _ = cv2.getTextSize(text, cv2.FONT_HERSHEY_SIMPLEX, 0.5, 1)
+        text_x = (w - text_width) // 2
+        text_y = (h + text_height) // 2
+        cv2.putText(frame, text, (text_x, text_y), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 1)
+        img = Image.fromarray(frame)
+        imgtk = ImageTk.PhotoImage(image=img)
+        label.imgtk = imgtk
+        label.configure(image=imgtk)
+
+        # Планируем переподключение, если поток должен быть активен
+        if self.video_stream_active[idx]:
+            logger.info(f"Попытка переподключения к потоку {idx} через 5 секунд.")
+            self.root.after(5000, lambda: self.start_video_stream(idx))
+
+    def toggle_video_stream(self, idx):
+        self.video_stream_active[idx] = not self.video_stream_active[idx]
+        if self.video_stream_active[idx]:
+            # Возобновляем
+            self.play_pause_buttons[idx].config(text="❚❚")
+            self.start_video_stream(idx)
+        else:
+            # Ставим на паузу
+            self.play_pause_buttons[idx].config(text="▶")
+            if self.after_ids[idx] is not None:
+                self.video_labels[idx].after_cancel(self.after_ids[idx])
+                self.after_ids[idx] = None
+            if self.captures[idx] is not None:
+                self.captures[idx].release()
+                self.captures[idx] = None
+            # Показываем черный экран с надписью Paused
+            label = self.video_labels[idx]
+            w = label.winfo_width()
+            h = label.winfo_height()
+            if w < 10 or h < 10: w, h = 400, 225
+            frame = np.zeros((h, w, 3), dtype=np.uint8)
+            text = "Paused"
+            (text_width, text_height), _ = cv2.getTextSize(text, cv2.FONT_HERSHEY_SIMPLEX, 0.5, 1)
+            text_x = (w - text_width) // 2
+            text_y = (h + text_height) // 2
+            cv2.putText(frame, text, (text_x, text_y), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 1)
+            img = Image.fromarray(frame)
+            imgtk = ImageTk.PhotoImage(image=img)
+            label.imgtk = imgtk
+            label.configure(image=imgtk)
+
     def on_channel_change(self, idx):
         # Остановить предыдущий поток
         if self.captures[idx] is not None:
@@ -192,9 +260,22 @@ class MonitoringUI:
             self.video_labels[idx].after_cancel(self.after_ids[idx])
             self.after_ids[idx] = None
         self.selected_channels[idx] = self.comboboxes[idx].get()
+        new_channel = self.selected_channels[idx]
+
+        # Update border for new channel
+        is_recording = self.recording_status.get(new_channel, False)
+        color = "red" if is_recording else "#444"
+        if self.grid_cells[idx]:
+            self.grid_cells[idx].config(highlightbackground=color, highlightcolor=color)
+            
+        self.video_stream_active[idx] = True # При смене канала всегда активируем поток
         self.start_video_stream(idx)
 
     def start_video_stream(self, idx):
+        # Если поток неактивен, не запускаем его (вызывается из toggle)
+        if not self.video_stream_active[idx]:
+            return
+        
         # Остановить предыдущий VideoCapture
         if self.captures[idx] is not None:
             self.captures[idx].release()
@@ -202,31 +283,72 @@ class MonitoringUI:
         if self.after_ids[idx] is not None:
             self.video_labels[idx].after_cancel(self.after_ids[idx])
             self.after_ids[idx] = None
+        
         channel = self.selected_channels[idx]
         url = self.channels[channel]["url"]
-        self.captures[idx] = cap = cv2.VideoCapture(url)
-        def update_frame():
-            if cap is None or not cap.isOpened():
-                frame = np.zeros((120, 200, 3), dtype=np.uint8)
-            else:
+        
+        # Убедимся, что состояние UI верное
+        self.video_stream_active[idx] = True
+        if self.play_pause_buttons: # Проверка, что кнопки уже созданы
+            self.play_pause_buttons[idx].config(text="❚❚")
+
+        def _start_capture_and_loop():
+            # Захват видео в этом же потоке, но с логикой переподключения
+            cap = cv2.VideoCapture(url)
+            self.captures[idx] = cap
+
+            def update_frame():
+                # Проверяем, не остановлен ли поток вручную
+                if not self.video_stream_active[idx]:
+                    return
+                
+                # Проверяем, жив ли сам cap
+                if cap is None or not cap.isOpened():
+                    logger.warning(f"Поток {idx} ({self.selected_channels[idx]}) не открыт.")
+                    self._handle_disconnect(idx)
+                    return
+
                 ret, frame = cap.read()
                 if not ret or frame is None:
-                    frame = np.zeros((120, 200, 3), dtype=np.uint8)
-            label = self.video_labels[idx]
-            w = label.winfo_width()
-            h = label.winfo_height()
-            # Минимальный размер для экономии ресурсов
-            min_w, min_h = 200, 120
-            if w < min_w or h < min_h:
-                w, h = min_w, min_h
-            frame = cv2.resize(frame, (w, h))
-            img = Image.fromarray(cv2.cvtColor(frame, cv2.COLOR_BGR2RGB))
-            imgtk = ImageTk.PhotoImage(image=img)
-            label.imgtk = imgtk
-            label.configure(image=imgtk)
-            self.after_ids[idx] = label.after(33, update_frame)  # ~30 fps
-        update_frame()
+                    logger.warning(f"Не удалось прочитать кадр из потока {idx} ({self.selected_channels[idx]}).")
+                    self._handle_disconnect(idx)
+                    return
 
+                label = self.video_labels[idx]
+                w = label.winfo_width()
+                h = label.winfo_height()
+                # Минимальный размер для экономии ресурсов
+                min_w, min_h = 200, 120
+                if w < min_w or h < min_h:
+                    w, h = min_w, min_h
+                frame = cv2.resize(frame, (w, h))
+                img = Image.fromarray(cv2.cvtColor(frame, cv2.COLOR_BGR2RGB))
+                imgtk = ImageTk.PhotoImage(image=img)
+                label.imgtk = imgtk
+                label.configure(image=imgtk)
+                self.after_ids[idx] = label.after(33, update_frame)  # ~30 fps
+            
+            update_frame()
+
+        # Показываем "Connecting..." перед запуском
+        label = self.video_labels[idx]
+        w = label.winfo_width()
+        h = label.winfo_height()
+        if w < 10 or h < 10: w, h = 400, 225
+        frame = np.full((h, w, 3), 32, dtype=np.uint8)
+        text = "Connecting..."
+        (text_width, text_height), _ = cv2.getTextSize(text, cv2.FONT_HERSHEY_SIMPLEX, 0.5, 1)
+        text_x = (w - text_width) // 2
+        text_y = (h + text_height) // 2
+        cv2.putText(frame, text, (text_x, text_y), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 1)
+        img = Image.fromarray(frame)
+        imgtk = ImageTk.PhotoImage(image=img)
+        label.imgtk = imgtk
+        label.configure(image=imgtk)
+        
+        # Запускаем в фоновом потоке, чтобы не блокировать UI
+        threading.Thread(target=_start_capture_and_loop, daemon=True).start()
+        
     def update_lines_status(self, status):
         self.lines_status.config(text=f"Состояние: {status}")
         if status == "Запущен":
@@ -253,18 +375,25 @@ class MonitoringUI:
             
     def update_processing_status(self, status):
         self.processing_status.config(text=f"Статус обработки: {status}")
+        if "Выполняется" in status or "Отправка" in status or "Обработка" in status:
+            if hasattr(self, "save_and_send_lines_button"):
+                self.save_and_send_lines_button.config(state="disabled")
+        else:
+            if hasattr(self, "save_and_send_lines_button"):
+                self.save_and_send_lines_button.config(state="normal")
             
     def update_video_check_status(self, status):
         self.video_check_status.config(text=f"Статус: {status}")
-        if status == "Выполняется":
-            self.check_video_button.config(state="disabled")
-            self.stop_video_check_button.config(state="normal")
+        if "Выполняется" in status:
+            self.check_and_send_video_button.config(state="disabled")
         else:
-            self.check_video_button.config(state="normal")
-            self.stop_video_check_button.config(state="disabled")
+            self.check_and_send_video_button.config(state="normal")
             
     def update_scheduler_status(self, status):
         self.scheduler_status.config(text=f"Планировщик: {status}")
+            
+    def update_auto_recorder_status(self, status):
+        self.auto_recorder_status.config(text=f"Авто-рекордер сюжетов: {status}")
             
     def update_status(self, message):
         self.status_label.config(text=message)
@@ -437,3 +566,19 @@ class MonitoringUI:
                 self.tooltip = None
         widget.bind("<Enter>", on_enter)
         widget.bind("<Leave>", on_leave)
+
+    def update_recording_status(self, channel_name, is_recording):
+        """Обновляет статус записи для канала и рамку в UI."""
+        if channel_name in self.recording_status:
+            self.recording_status[channel_name] = is_recording
+            logger.info(f"Статус записи для {channel_name} изменен на {is_recording}")
+        else:
+            logger.warning(f"Попытка обновить статус для неизвестного канала: {channel_name}")
+            return
+
+        # Обновить рамки для всех видимых окон
+        for idx, displayed_channel in enumerate(self.selected_channels):
+            if displayed_channel == channel_name:
+                color = "red" if is_recording else "#444"
+                if self.grid_cells[idx]:
+                    self.grid_cells[idx].config(highlightbackground=color, highlightcolor=color)

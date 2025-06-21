@@ -4,6 +4,7 @@ import logging
 from datetime import datetime
 from telegram import Bot
 from telegram.constants import ParseMode
+from telegram.request import HTTPXRequest
 from PIL import Image
 import io
 import shutil
@@ -231,28 +232,15 @@ async def send_to_telegram(excel_file, screenshot_files):
         logger.error(f"Error sending to Telegram: {e}")
         raise
 
-def send_files(excel_file, screenshot_files):
-    """Send files to Telegram."""
+def send_report_files(excel_file, screenshot_files):
+    """Send report files (Excel and screenshots) to Telegram."""
     import asyncio
     try:
-        # Создаем новый event loop
-        loop = asyncio.new_event_loop()
-        asyncio.set_event_loop(loop)
-        
-        # Запускаем отправку
-        loop.run_until_complete(send_to_telegram(excel_file, screenshot_files))
+        asyncio.run(send_to_telegram(excel_file, screenshot_files))
         logger.info("Files sent and deleted successfully")
     except Exception as e:
         logger.error(f"Failed to send files: {e}")
         raise
-    finally:
-        # Закрываем все задачи перед закрытием цикла
-        pending = asyncio.all_tasks(loop)
-        for task in pending:
-            task.cancel()
-        # Даем время на завершение задач
-        loop.run_until_complete(asyncio.gather(*pending, return_exceptions=True))
-        loop.close()
 
 async def send_video_files():
     """Отправка только видео файлов в Telegram."""
@@ -329,29 +317,18 @@ def send_video_files_sync():
     """Send video files to Telegram."""
     import asyncio
     try:
-        # Создаем новый event loop
-        loop = asyncio.new_event_loop()
-        asyncio.set_event_loop(loop)
-        
-        # Запускаем отправку
-        loop.run_until_complete(send_video_files())
+        asyncio.run(send_video_files())
         logger.info("Video files sent and deleted successfully")
     except Exception as e:
         logger.error(f"Failed to send video files: {e}")
         raise
-    finally:
-        # Закрываем все задачи перед закрытием цикла
-        pending = asyncio.all_tasks(loop)
-        for task in pending:
-            task.cancel()
-        # Даем время на завершение задач
-        loop.run_until_complete(asyncio.gather(*pending, return_exceptions=True))
-        loop.close()
 
 async def send_files_with_caption(file_paths, caption=""):
     """Отправка файлов в Telegram с пользовательским caption."""
     try:
-        bot = Bot(token=TELEGRAM_TOKEN)
+        # Увеличиваем таймаут для отправки больших файлов (5 минут)
+        httpx_request = HTTPXRequest(read_timeout=300.0, connect_timeout=300.0)
+        bot = Bot(token=TELEGRAM_TOKEN, request=httpx_request)
         sent_files = []  # Список для отслеживания успешно отправленных файлов
         available_chats = []  # Список доступных чатов
 
@@ -417,12 +394,7 @@ def send_files(file_paths, caption=""):
     """Send files to Telegram with custom caption."""
     import asyncio
     try:
-        # Создаем новый event loop
-        loop = asyncio.new_event_loop()
-        asyncio.set_event_loop(loop)
-        
-        # Запускаем отправку
-        success = loop.run_until_complete(send_files_with_caption(file_paths, caption))
+        success = asyncio.run(send_files_with_caption(file_paths, caption))
         if success:
             logger.info("Files sent successfully")
         else:
@@ -431,14 +403,6 @@ def send_files(file_paths, caption=""):
     except Exception as e:
         logger.error(f"Failed to send files: {e}")
         raise
-    finally:
-        # Закрываем все задачи перед закрытием цикла
-        pending = asyncio.all_tasks(loop)
-        for task in pending:
-            task.cancel()
-        # Даем время на завершение задач
-        loop.run_until_complete(asyncio.gather(*pending, return_exceptions=True))
-        loop.close()
 
 if __name__ == "__main__":
     pass

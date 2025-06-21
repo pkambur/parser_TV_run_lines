@@ -13,7 +13,7 @@ from auto_recorder import record_channel  # Импортируем функци�
 logger = logging.getLogger(__name__)
 base_dir = os.path.abspath("video")  # Абсолютный путь для надежности
 LINES_VIDEO_ROOT = os.path.abspath("lines_video")  # Для crop-роликов
-VIDEO_DURATION = 120  # Для тестов 120 секунд, для продакшена можно увеличить до 240
+VIDEO_DURATION = 240  # 240 секунд
 
 def get_current_time_str():
     """Возвращает текущее время в формате HH:MM"""
@@ -62,9 +62,15 @@ async def check_video_resolution(url):
             logger.error(f"Ошибка ffprobe для {url}: {stderr.decode()}")
             return None
         data = json.loads(stdout.decode())
-        stream = data.get("streams", [{}])[0]
-        width = stream.get("width")
-        height = stream.get("height")
+        
+        # Ищем первый поток с разрешением
+        width, height = None, None
+        for stream in data.get("streams", []):
+            if "width" in stream and "height" in stream:
+                width = stream.get("width")
+                height = stream.get("height")
+                break
+        
         if width is None or height is None:
             logger.warning(f"Разрешение видео для {url} не определено: {data}")
             return None
