@@ -433,10 +433,9 @@ class MonitoringUI:
 
     def open_settings_window(self):
         import json
-        import os
         settings_win = tk.Toplevel(self.root)
         settings_win.title("Настройки телеканалов")
-        settings_win.geometry("600x600")
+        settings_win.geometry("600x650") # Немного увеличим высоту
         settings_win.transient(self.root)
         settings_win.grab_set()
 
@@ -446,48 +445,57 @@ class MonitoringUI:
                 channels = json.load(f)
         except Exception:
             channels = {}
-
         channel_names = list(channels.keys())
 
-        # Выбор канала или добавление нового
-        tk.Label(settings_win, text="Выберите канал или добавьте новый:").pack(pady=5)
+        # 1. Объявляем все переменные
         channel_var = tk.StringVar()
+        name_var = tk.StringVar()
+        url_var = tk.StringVar()
+        crop_var = tk.StringVar()
+        interval_var = tk.StringVar()
+        default_duration_var = tk.StringVar()
+        special_durations_var = tk.StringVar()
+
+        # 2. Создаем виджеты
+        tk.Label(settings_win, text="Выберите канал или добавьте новый:").pack(pady=5)
         channel_combo = ttk.Combobox(settings_win, values=channel_names, textvariable=channel_var, state="normal")
         channel_combo.pack(fill="x", padx=20)
+        
+        # --- Общие параметры ---
+        general_frame = ttk.LabelFrame(settings_win, text="Общие параметры", padding=10)
+        general_frame.pack(fill="x", padx=20, pady=5, expand=True)
+        tk.Label(general_frame, text="Название телеканала:").pack(anchor="w")
+        name_entry = tk.Entry(general_frame, textvariable=name_var)
+        name_entry.pack(fill="x", pady=(0, 5))
+        tk.Label(general_frame, text="Ссылка на видеопоток:").pack(anchor="w")
+        url_entry = tk.Entry(general_frame, textvariable=url_var)
+        url_entry.pack(fill="x", pady=(0, 5))
+        tk.Label(general_frame, text="Параметры обрезки (crop=width:height:x:y):").pack(anchor="w")
+        crop_entry = tk.Entry(general_frame, textvariable=crop_var)
+        crop_entry.pack(fill="x", pady=(0, 5))
+        tk.Label(general_frame, text="Интервал (например, 1/7):").pack(anchor="w")
+        interval_entry = tk.Entry(general_frame, textvariable=interval_var)
+        interval_entry.pack(fill="x")
 
-        # Название
-        tk.Label(settings_win, text="Название телеканала:").pack(pady=(10,0))
-        name_var = tk.StringVar()
-        name_entry = tk.Entry(settings_win, textvariable=name_var)
-        name_entry.pack(fill="x", padx=20)
+        # --- Параметры длительности ---
+        duration_frame = ttk.LabelFrame(settings_win, text="Параметры длительности записи (сюжеты)", padding=10)
+        duration_frame.pack(fill="x", padx=20, pady=5, expand=True)
+        tk.Label(duration_frame, text="Длительность выпуска по умолчанию (мин):").pack(anchor="w")
+        default_duration_entry = tk.Entry(duration_frame, textvariable=default_duration_var)
+        default_duration_entry.pack(fill="x", pady=(0, 5))
+        tk.Label(duration_frame, text="Особые длительности (формат: 14:00=20, 18:00=20):").pack(anchor="w")
+        special_durations_entry = tk.Entry(duration_frame, textvariable=special_durations_var)
+        special_durations_entry.pack(fill="x")
 
-        # Ссылка
-        tk.Label(settings_win, text="Ссылка на видеопоток:").pack(pady=(10,0))
-        url_var = tk.StringVar()
-        url_entry = tk.Entry(settings_win, textvariable=url_var)
-        url_entry.pack(fill="x", padx=20)
-
-        # Crop
-        tk.Label(settings_win, text="Параметры обрезки (crop=width:height:x:y):").pack(pady=(10,0))
-        crop_var = tk.StringVar()
-        crop_entry = tk.Entry(settings_win, textvariable=crop_var)
-        crop_entry.pack(fill="x", padx=20)
-
-        # Интервал
-        tk.Label(settings_win, text="Интервал (например, 1/7):").pack(pady=(10,0))
-        interval_var = tk.StringVar()
-        interval_entry = tk.Entry(settings_win, textvariable=interval_var)
-        interval_entry.pack(fill="x", padx=20)
-
-        # Schedule (видео)
-        tk.Label(settings_win, text="Время записи видео (schedule, через запятую или с новой строки):").pack(pady=(10,0))
-        schedule_text = tk.Text(settings_win, height=3)
-        schedule_text.pack(fill="x", padx=20)
-
-        # Lines (мониторинг строк)
-        tk.Label(settings_win, text="Время мониторинга строк (lines, через запятую или с новой строки):").pack(pady=(10,0))
-        lines_text = tk.Text(settings_win, height=3)
-        lines_text.pack(fill="x", padx=20)
+        # --- Расписание ---
+        schedule_frame = ttk.LabelFrame(settings_win, text="Расписание", padding=10)
+        schedule_frame.pack(fill="x", padx=20, pady=5, expand=True)
+        tk.Label(schedule_frame, text="Время записи видео (schedule, через запятую или с новой строки):").pack(anchor="w")
+        schedule_text = tk.Text(schedule_frame, height=3)
+        schedule_text.pack(fill="x", pady=(0, 5))
+        tk.Label(schedule_frame, text="Время мониторинга строк (lines, через запятую или с новой строки):").pack(anchor="w")
+        lines_text = tk.Text(schedule_frame, height=3)
+        lines_text.pack(fill="x")
 
         def fill_fields(event=None):
             ch = channel_var.get()
@@ -496,21 +504,20 @@ class MonitoringUI:
                 url_var.set(channels[ch].get('url', ''))
                 crop_var.set(channels[ch].get('crop', ''))
                 interval_var.set(channels[ch].get('interval', ''))
-                # schedule
-                schedule_val = channels[ch].get('schedule', [])
+                default_duration_var.set(str(channels[ch].get('default_duration', '')))
+                specials = channels[ch].get('special_durations', {})
+                special_durations_var.set(', '.join(f"{k}={v}" for k, v in specials.items()) if specials else '')
                 schedule_text.delete('1.0', tk.END)
-                if schedule_val:
-                    schedule_text.insert(tk.END, ', '.join(schedule_val))
-                # lines
-                lines_val = channels[ch].get('lines', [])
+                schedule_text.insert(tk.END, ', '.join(channels[ch].get('schedule', [])))
                 lines_text.delete('1.0', tk.END)
-                if lines_val:
-                    lines_text.insert(tk.END, ', '.join(lines_val))
+                lines_text.insert(tk.END, ', '.join(channels[ch].get('lines', [])))
             else:
                 name_var.set(ch)
                 url_var.set('')
                 crop_var.set('')
                 interval_var.set('')
+                default_duration_var.set('')
+                special_durations_var.set('')
                 schedule_text.delete('1.0', tk.END)
                 lines_text.delete('1.0', tk.END)
         channel_combo.bind("<<ComboboxSelected>>", fill_fields)
@@ -518,35 +525,45 @@ class MonitoringUI:
 
         def parse_time_list(text_widget):
             raw = text_widget.get('1.0', tk.END).strip()
-            if not raw:
-                return []
-            # Разделить по запятым и/или переводам строк
+            if not raw: return []
             items = [item.strip() for part in raw.split('\n') for item in part.split(',')]
             return [item for item in items if item]
 
         def save_channel():
             ch_name = name_var.get().strip()
-            url = url_var.get().strip()
-            crop = crop_var.get().strip()
-            interval = interval_var.get().strip()
-            schedule_list = parse_time_list(schedule_text)
-            lines_list = parse_time_list(lines_text)
-            if not ch_name or not url:
+            if not ch_name or not url_var.get().strip():
                 tk.messagebox.showerror("Ошибка", "Название и ссылка обязательны!")
                 return
-            channels[ch_name] = {
-                'url': url,
-                'crop': crop,
-                'interval': interval,
-                'schedule': schedule_list,
-                'lines': lines_list
+            
+            specials = {}
+            if specials_raw := special_durations_var.get().strip():
+                for part in specials_raw.split(','):
+                    if '=' in part:
+                        k, v = part.split('=', 1)
+                        try:
+                            specials[k.strip()] = int(v.strip())
+                        except ValueError: continue
+            
+            channel_data = {
+                'url': url_var.get().strip(),
+                'crop': crop_var.get().strip(),
+                'interval': interval_var.get().strip(),
+                'schedule': parse_time_list(schedule_text),
+                'lines': parse_time_list(lines_text)
             }
+            if default_duration_raw := default_duration_var.get().strip():
+                try:
+                    channel_data['default_duration'] = int(default_duration_raw)
+                except ValueError: pass
+            if specials:
+                channel_data['special_durations'] = specials
+            
+            channels[ch_name] = channel_data
             try:
                 with open('channels.json', 'w', encoding='utf-8') as f:
                     json.dump(channels, f, ensure_ascii=False, indent=4)
                 tk.messagebox.showinfo("Успех", f"Канал '{ch_name}' сохранён.")
                 settings_win.destroy()
-                # Обновить список каналов в основном окне
                 self.channels = channels
                 self.channel_names = list(channels.keys())
                 for combo in self.comboboxes:

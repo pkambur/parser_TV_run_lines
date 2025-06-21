@@ -149,14 +149,21 @@ class MonitoringApp:
 
         for channel, info in channels.items():
             # Этот планировщик отвечает ТОЛЬКО за 'lines'
-            times = info.get("lines", [])
-            if not times:
+            lines_times = set(info.get("lines", []))
+            schedule_times = set(info.get("schedule", []))
+            
+            if not lines_times:
                 continue
+
             method = channel_methods.get(channel)
             if method:
-                for t in times:
+                for t in lines_times:
+                    if t in schedule_times:
+                        logger.info(f"Пропуск расписания 'lines' для {channel} в {t}, так как оно совпадает с 'schedule'. Запись сюжета будет выполнена.")
+                        continue
+                    
                     schedule.every().day.at(t).do(method)
-                    logger.info(f"Добавлено расписание для {channel}: {t}")
+                    logger.info(f"Добавлено расписание для {channel} ('lines'): {t}")
 
         # Настройка отправки ежедневного файла в Telegram
         schedule.every().day.at("22:00").do(self._send_daily_file_to_telegram)
