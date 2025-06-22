@@ -16,6 +16,7 @@ from http.server import BaseHTTPRequestHandler, HTTPServer
 from urllib.parse import parse_qs
 import cv2
 from typing import List
+import numpy as np
 
 from UI import MonitoringUI
 from rbk_mir24_parser import process_rbk_mir24, stop_rbk_mir24
@@ -65,7 +66,11 @@ class MonitoringApp:
         # Переменные для распознавания видео
         self.video_recognition_thread = None
         self.video_recognition_running = False
-        self.video_recognizer = None
+        self.video_recognizer_instance = None
+        
+        # Переменные для обработки сюжетов
+        self.video_processing_thread = None
+        self.video_processing_running = False
         
         # Для запуска auto_recorder.py
         self.auto_recorder_process = None
@@ -408,12 +413,32 @@ class MonitoringApp:
         else:
             messagebox.showwarning("Предупреждение", "Мониторинг RBK и MIR24 уже остановлен или event loop не инициализирован")
 
+    def get_video_recognizer(self):
+        """Возвращает синглтон-экземпляр VideoTextRecognizer, инициализируя его при первом вызове."""
+        if self.video_recognizer_instance is None:
+            self.logger.info("Первый запуск, создание экземпляра VideoTextRecognizer...")
+            try:
+                self.video_recognizer_instance = VideoTextRecognizer()
+                # Проверка, что ключевой компонент (EasyOCR) был успешно загружен
+                if self.video_recognizer_instance.easyocr_reader is None:
+                    self.logger.error("Не удалось инициализировать EasyOCR ридер в VideoTextRecognizer.")
+                    self.video_recognizer_instance = None # Сбрасываем, чтобы попробовать еще раз
+            except Exception as e:
+                self.logger.critical(f"Критическая ошибка при создании VideoTextRecognizer: {e}", exc_info=True)
+                self.video_recognizer_instance = None
+        return self.video_recognizer_instance
+
     def _recognize_text_from_image(self, recognizer: VideoTextRecognizer, image_path: str) -> List[str]:
         """Распознает текст на изображении и проверяет наличие ключевых слов."""
         try:
-            frame = cv2.imread(image_path)
+            # Используем cv2.imdecode для корректной работы с путями, содержащими не-ASCII символы
+            with open(image_path, "rb") as f:
+                img_bytes = f.read()
+            nparr = np.frombuffer(img_bytes, np.uint8)
+            frame = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
+
             if frame is None:
-                logger.warning(f"Не удалось прочитать изображение: {image_path}")
+                logger.warning(f"Не удалось прочитать/декодировать изображение: {image_path}")
                 return []
             
             results = recognizer.easyocr_reader.readtext(frame)
@@ -466,7 +491,13 @@ class MonitoringApp:
 
             self.ui.root.after(0, self.ui.update_processing_status, "Обработка: распознавание текста...")
             
-            recognizer = VideoTextRecognizer() 
+            recognizer = self.get_video_recognizer()
+            if not recognizer:
+                logger.error("Распознаватель текста (EasyOCR) не был инициализирован. Прерывание задачи.")
+                self.ui.root.after(0, messagebox.showerror, "Критическая ошибка", "Не удалось инициализировать модуль распознавания текста. Подробности в логах.")
+                self.ui.root.after(0, self.ui.update_processing_status, "Ошибка")
+                return
+
             files_with_keywords = []
             
             all_files = list(screenshots_dir.rglob("*.[jp][pn]g")) 
@@ -880,6 +911,70 @@ class MonitoringApp:
         if time_module.time() - self.last_lines_activity_time > idle_timeout:
             logger.info(f"Не было активности мониторинга строк более {idle_timeout / 60:.0f} минут. Запускаю стандартный сеанс мониторинга.")
             self._start_other_channels_monitoring()
+
+    def start_video_processing(self):
+        """Запускает скрипт обработки видеосюжетов в отдельном потоке."""
+        if self.video_processing_running:
+            messagebox.showwarning("Предупреждение", "Обработка сюжетов уже запущена.")
+            return
+
+        try:
+            self.video_processing_running = True
+            self.ui.update_video_processing_status("Выполняется...")
+            
+            self.video_processing_thread = threading.Thread(
+                target=self._run_video_processing_task,
+                daemon=True
+            )
+            self.video_processing_thread.start()
+            
+        except Exception as e:
+            logger.error(f"Ошибка при запуске обработки сюжетов: {e}")
+            self.video_processing_running = False
+            self.ui.update_video_processing_status("Ошибка")
+            messagebox.showerror("Ошибка", f"Не удалось запустить процесс обработки сюжетов: {e}")
+
+    def _run_video_processing_task(self):
+        """Задача, выполняющая запуск video_processor.py."""
+        try:
+            python_executable = sys.executable
+            script_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "video_processor.py")
+            
+            process = subprocess.Popen(
+                [python_executable, script_path],
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+                encoding='utf-8',
+                errors='replace'
+            )
+            
+            # Логируем вывод скрипта в реальном времени
+            for line in process.stdout:
+                logger.info(f"[VideoProcessor]: {line.strip()}")
+            
+            stderr_output = process.stderr.read()
+            if stderr_output:
+                logger.error(f"[VideoProcessor Error]: {stderr_output.strip()}")
+
+            process.wait()
+
+            if process.returncode == 0:
+                logger.info("Обработка сюжетов успешно завершена.")
+                self.ui.root.after(0, self.ui.update_video_processing_status, "Завершено")
+                self.ui.root.after(0, messagebox.showinfo, "Успех", "Обработка видеосюжетов успешно завершена.")
+            else:
+                logger.error(f"Скрипт обработки сюжетов завершился с ошибкой (код: {process.returncode}).")
+                self.ui.root.after(0, self.ui.update_video_processing_status, "Ошибка")
+                self.ui.root.after(0, messagebox.showerror, "Ошибка", f"Обработка сюжетов завершилась с ошибкой. Подробности в логах.")
+
+        except Exception as e:
+            logger.error(f"Критическая ошибка в задаче обработки сюжетов: {e}")
+            self.ui.root.after(0, self.ui.update_video_processing_status, "Критическая ошибка")
+        finally:
+            self.video_processing_running = False
+            # Статус уже обновлен, но можно поставить "Ожидание", если нужно
+            # self.ui.root.after(0, self.ui.update_video_processing_status, "Ожидание")
 
 class StatusHandler(BaseHTTPRequestHandler):
     def __init__(self, ui_instance, *args, **kwargs):

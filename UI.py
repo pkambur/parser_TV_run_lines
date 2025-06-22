@@ -37,6 +37,7 @@ class MonitoringUI:
         self.after_ids = [None]*4
         self.play_pause_buttons = []
         self.video_stream_active = [True]*4
+        self.video_frames = []  # Will store the frames that have the border
         self.create_widgets()
         
     def create_widgets(self):
@@ -114,8 +115,14 @@ class MonitoringUI:
         
         processing_frame = ttk.LabelFrame(self.sidebar, text="Обработка файлов", padding=10)
         processing_frame.pack(fill="x", padx=10, pady=5)
-        self.processing_status = ttk.Label(processing_frame, text="Статус обработки: Ожидание")
+        
+        self.processing_status = ttk.Label(processing_frame, text="Статус (скриншоты): Ожидание")
         self.processing_status.pack(fill="x", pady=5)
+
+        self.process_videos_button = ttk.Button(processing_frame, text="Обработать сюжеты", command=self.app.start_video_processing)
+        self.process_videos_button.pack(fill="x", pady=5)
+        self.video_processing_status = ttk.Label(processing_frame, text="Статус (сюжеты): Ожидание")
+        self.video_processing_status.pack(fill="x", pady=5)
         
         self.status_label = ttk.Label(self.sidebar, text="Готов к работе")
         self.status_label.pack(side="bottom", fill="x", padx=10, pady=5)
@@ -170,9 +177,18 @@ class MonitoringUI:
         if hasattr(self, 'captures') and self.captures[idx] is not None:
             cap = self.captures[idx]
             if cap.isOpened():
-                ret, frame = cap.read()
+                try:
+                    ret, frame = cap.read()
+                except cv2.error as e:
+                    logger.error(f"OpenCV ошибка при чтении кадра из потока {idx} ({self.selected_channels[idx]}): {e}")
+                    self._handle_disconnect(idx)
+                    return
+                    
                 if not ret or frame is None:
-                    frame = np.zeros((240, 400, 3), dtype=np.uint8)
+                    logger.warning(f"Не удалось прочитать кадр из потока {idx} ({self.selected_channels[idx]}).")
+                    self._handle_disconnect(idx)
+                    return
+
                 label = self.video_labels[idx]
                 w = label.winfo_width()
                 h = label.winfo_height()
@@ -315,7 +331,13 @@ class MonitoringUI:
                     self._handle_disconnect(idx)
                     return
 
-                ret, frame = cap.read()
+                try:
+                    ret, frame = cap.read()
+                except cv2.error as e:
+                    logger.error(f"OpenCV ошибка при чтении кадра из потока {idx} ({self.selected_channels[idx]}): {e}")
+                    self._handle_disconnect(idx)
+                    return
+                    
                 if not ret or frame is None:
                     logger.warning(f"Не удалось прочитать кадр из потока {idx} ({self.selected_channels[idx]}).")
                     self._handle_disconnect(idx)
@@ -333,7 +355,7 @@ class MonitoringUI:
                 imgtk = ImageTk.PhotoImage(image=img)
                 label.imgtk = imgtk
                 label.configure(image=imgtk)
-                self.after_ids[idx] = label.after(33, update_frame)  # ~30 fps
+                self.after_ids[idx] = label.after(100, update_frame)  # ~10 fps
             
             update_frame()
 
@@ -615,3 +637,11 @@ class MonitoringUI:
         else:
             self.pause_scheduler_button.config(state="normal")
             self.resume_scheduler_button.config(state="disabled")
+
+    def update_video_processing_status(self, status):
+        """Обновление статуса обработки видеосюжетов."""
+        self.video_processing_status.config(text=f"Статус (сюжеты): {status}")
+        if "Выполняется" in status:
+            self.process_videos_button.config(state="disabled")
+        else:
+            self.process_videos_button.config(state="normal")

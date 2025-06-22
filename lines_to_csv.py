@@ -42,7 +42,7 @@ def ensure_processed_dir():
     return processed_dir
 
 # Инициализация Hugging Face API
-HF_API_TOKEN = os.getenv("HUGGINGFACE_HUB_TOKEN")
+HF_API_TOKEN = os.getenv("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")
 if not HF_API_TOKEN:
     logger.warning("HUGGINGFACE_HUB_TOKEN не установлен. Проверка текста будет ограничена.")
     client = None
