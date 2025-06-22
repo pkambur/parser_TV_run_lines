@@ -9,7 +9,7 @@ import cv2
 import numpy as np
 import pytesseract
 import easyocr
-import logging
+from utils import setup_logging
 from datetime import datetime
 from pathlib import Path
 import json
@@ -18,8 +18,7 @@ import re
 import pandas as pd
 
 # Настройка логирования
-logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger(__name__)
+logger = setup_logging('video_text_recognition_log.txt')
 
 class VideoTextRecognizer:
     """Класс для распознавания текста из видео файлов"""

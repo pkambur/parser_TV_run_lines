@@ -7,8 +7,8 @@ from functools import wraps
 logger = logging.getLogger(__name__)
 
 
-def setup_logging():
-    """Настройка логирования."""
+def setup_logging(log_filename='main_log.txt'):
+    """Настройка логирования с возможностью указать имя файла лога."""
     # Получаем путь к директории исполняемого файла
     if getattr(sys, 'frozen', False):
         # Если это исполняемый файл (PyInstaller)
@@ -24,7 +24,7 @@ def setup_logging():
     os.makedirs(logs_dir, exist_ok=True)
     
     # Путь к файлу лога
-    log_file = os.path.join(logs_dir, 'main_log.txt')
+    log_file = os.path.join(logs_dir, log_filename)
     
     logging.basicConfig(
         level=logging.INFO,

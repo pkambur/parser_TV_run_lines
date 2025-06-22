@@ -10,7 +10,7 @@ import cv2
 import numpy as np
 
 # Инициализация логирования
-logger = setup_logging()
+logger = setup_logging('parser_lines_log.txt')
 
 # Глобальные переменные для управления мониторингом
 monitoring_threads = []

@@ -7,8 +7,9 @@ import threading
 import json
 import os
 import numpy as np
+from utils import setup_logging
 
-logger = logging.getLogger(__name__)
+logger = setup_logging('ui_log.txt')
 
 # Загрузка каналов из channels.json
 CHANNELS_FILE = 'channels.json'

@@ -1,13 +1,13 @@
 import os
 import json
 import subprocess
-import logging
 from pathlib import Path
 import sys
 from datetime import timedelta, datetime
 import requests
 from typing import Optional, TYPE_CHECKING, Any
 import argparse
+from utils import setup_logging
 
 if TYPE_CHECKING:
     from natasha import MorphVocab
@@ -28,8 +28,7 @@ except ImportError:
     from telegram_sender import send_files
 
 # --- Настройка ---
-logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
-logger = logging.getLogger(__name__)
+logger = setup_logging('video_processor_log.txt')
 
 # --- Константы ---
 VIDEO_SOURCE_DIR = Path("TV_video")

@@ -6,16 +6,14 @@ import schedule
 import json
 from datetime import datetime
 import subprocess
-import logging
 import urllib.request
 import urllib.parse
 import sys
 from telegram_sender import send_files
 import shlex
+from utils import setup_logging
 
-# Настройка логирования
-logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
-logger = logging.getLogger(__name__)
+logger = setup_logging('auto_recorder_log.txt')
 
 CHANNELS_FILE = 'channels.json'
 VIDEO_ROOT = 'TV_video'

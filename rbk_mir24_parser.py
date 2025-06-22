@@ -10,7 +10,7 @@ import numpy as np
 from utils import setup_logging
 from auto_recorder import record_channel  # Импортируем функцию записи всего потока
 
-logger = logging.getLogger(__name__)
+logger = setup_logging('rbk_mir24_parser_log.txt')
 base_dir = os.path.abspath("video")  # Абсолютный путь для надежности
 LINES_VIDEO_ROOT = os.path.abspath("lines_video")  # Для crop-роликов
 VIDEO_DURATION = 240  # 240 секунд

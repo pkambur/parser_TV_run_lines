@@ -17,6 +17,7 @@ from urllib.parse import parse_qs
 import cv2
 from typing import List
 import numpy as np
+import re
 
 from UI import MonitoringUI
 from rbk_mir24_parser import process_rbk_mir24, stop_rbk_mir24
@@ -499,17 +500,52 @@ class MonitoringApp:
                 return
 
             files_with_keywords = []
+            file_captions = {}
             
             all_files = list(screenshots_dir.rglob("*.[jp][pn]g")) 
             logger.info(f"Найдено {len(all_files)} скриншотов для обработки.")
             
             for file_path in all_files:
+                # Получаем распознанный текст и ключевые слова
                 keywords_found = self._recognize_text_from_image(recognizer, str(file_path))
+                # Для caption: распознанный текст, канал, время
+                recognized_text = ""
+                channel = ""
+                timestamp = ""
+                if hasattr(recognizer, 'easyocr_reader'):
+                    # Попробуем получить текст через easyocr напрямую
+                    try:
+                        with open(file_path, "rb") as f:
+                            img_bytes = f.read()
+                        nparr = np.frombuffer(img_bytes, np.uint8)
+                        frame = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
+                        results = recognizer.easyocr_reader.readtext(frame)
+                        recognized_text = " ".join([res[1] for res in results])
+                    except Exception as e:
+                        logger.warning(f"Не удалось получить распознанный текст для {file_path}: {e}")
+                # Канал можно взять из имени папки (screenshots/CHANNEL/filename)
+                try:
+                    channel = file_path.parent.name
+                except Exception:
+                    channel = ""
+                # Время из имени файла
+                try:
+                    date_pattern = r'(\d{8})_(\d{6})'
+                    match = re.search(date_pattern, file_path.name)
+                    if match:
+                        date_str = match.group(1)
+                        time_str = match.group(2)
+                        timestamp = datetime.strptime(f"{date_str}_{time_str}", "%Y%m%d_%H%M%S").strftime("%Y-%m-%d %H:%M:%S")
+                except Exception:
+                    timestamp = ""
                 if keywords_found:
                     try:
                         new_path = processed_dir / file_path.name
                         file_path.rename(new_path)
                         files_with_keywords.append(new_path)
+                        # Формируем caption
+                        caption = f"{channel}\n{timestamp}\n{recognized_text}".strip()
+                        file_captions[str(new_path)] = caption
                         logger.info(f"Файл {file_path.name} перемещен в {processed_dir}")
                     except Exception as e:
                         logger.error(f"Не удалось переместить файл {file_path.name}: {e}")
@@ -529,7 +565,7 @@ class MonitoringApp:
             sent_count = 0
             
             for file_path in files_with_keywords:
-                caption = f"Обнаружены ключевые слова в файле: {file_path.name}"
+                caption = file_captions.get(str(file_path), f"{file_path.name}")
                 if send_files([str(file_path)], caption=caption):
                     sent_count += 1
                     try:

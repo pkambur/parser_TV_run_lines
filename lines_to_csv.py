@@ -20,8 +20,9 @@ import easyocr
 from difflib import SequenceMatcher
 import schedule
 import time
+from utils import setup_logging
 
-logger = logging.getLogger(__name__)
+logger = setup_logging('lines_to_csv_log.txt')
 
 # Загрузка ключевых слов
 def load_keywords():
