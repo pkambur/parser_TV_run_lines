@@ -8,7 +8,6 @@ from datetime import datetime
 import cv2
 import numpy as np
 from utils import setup_logging
-from auto_recorder import record_channel  # Импортируем функцию записи всего потока
 
 logger = setup_logging('rbk_mir24_parser_log.txt')
 base_dir = os.path.abspath("video")  # Абсолютный путь для надежности
@@ -312,11 +311,7 @@ async def process_rbk_mir24(app, ui, send_files=False, channels=None, force_crop
                 if now_str in schedule_times:
                     logger.info(f"{name}: {now_str} найдено в schedule — запись полного потока (TV_video)")
                     url = info.get("url")
-                    if url:
-                        loop = asyncio.get_event_loop()
-                        loop.run_in_executor(None, record_channel, name, url)
-                    else:
-                        logger.warning(f"URL не найден для {name}")
+                    # Теперь ничего не делаем для schedule_times
                 elif now_str in lines_times:
                     logger.info(f"{name}: {now_str} найдено в lines — запись crop-ролика (lines_video)")
                     task = asyncio.create_task(record_lines_video(name, info, VIDEO_DURATION))

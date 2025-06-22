@@ -18,6 +18,9 @@ import cv2
 from typing import List
 import numpy as np
 import re
+import pytesseract
+from difflib import SequenceMatcher
+import requests
 
 from UI import MonitoringUI
 from rbk_mir24_parser import process_rbk_mir24, stop_rbk_mir24
@@ -25,7 +28,6 @@ from utils import setup_logging
 from parser_lines import main as start_lines_monitoring, stop_subprocesses, start_force_capture, stop_force_capture
 from lines_to_csv import process_screenshots, get_daily_file_path
 from telegram_sender import send_files, send_report_files
-from video_text_recognition import VideoTextRecognizer
 
 # Инициализация логирования
 logger = setup_logging()
@@ -64,17 +66,15 @@ class MonitoringApp:
         self.lines_monitoring_thread = None
         self.lines_monitoring_running = False
 
-        # Переменные для распознавания видео
-        self.video_recognition_thread = None
-        self.video_recognition_running = False
-        self.video_recognizer_instance = None
-        
         # Переменные для обработки сюжетов
         self.video_processing_thread = None
         self.video_processing_running = False
         
         # Для запуска auto_recorder.py
         self.auto_recorder_process = None
+
+        # Для видео-проверки (check_and_send_videos)
+        self.video_recognition_running = False
 
         # Инициализируем event loop
         self.loop = asyncio.new_event_loop()
@@ -174,6 +174,10 @@ class MonitoringApp:
         # Настройка отправки ежедневного файла в Telegram
         schedule.every().day.at("22:00").do(self._send_daily_file_to_telegram)
         logger.info("Добавлено расписание отправки ежедневного файла в Telegram: 22:00")
+
+        # Новое: отправка файла с текстами скриншотов за день в 23:00
+        schedule.every().day.at("23:00").do(self._send_daily_sent_texts_to_telegram)
+        logger.info("Добавлено расписание отправки sent_texts_YYYYMMDD.txt в Telegram: 23:00")
 
         logger.info("Расписание настроено, начинаем выполнение...")
         self.ui.update_scheduler_status("Активен")
@@ -414,52 +418,6 @@ class MonitoringApp:
         else:
             messagebox.showwarning("Предупреждение", "Мониторинг RBK и MIR24 уже остановлен или event loop не инициализирован")
 
-    def get_video_recognizer(self):
-        """Возвращает синглтон-экземпляр VideoTextRecognizer, инициализируя его при первом вызове."""
-        if self.video_recognizer_instance is None:
-            self.logger.info("Первый запуск, создание экземпляра VideoTextRecognizer...")
-            try:
-                self.video_recognizer_instance = VideoTextRecognizer()
-                # Проверка, что ключевой компонент (EasyOCR) был успешно загружен
-                if self.video_recognizer_instance.easyocr_reader is None:
-                    self.logger.error("Не удалось инициализировать EasyOCR ридер в VideoTextRecognizer.")
-                    self.video_recognizer_instance = None # Сбрасываем, чтобы попробовать еще раз
-            except Exception as e:
-                self.logger.critical(f"Критическая ошибка при создании VideoTextRecognizer: {e}", exc_info=True)
-                self.video_recognizer_instance = None
-        return self.video_recognizer_instance
-
-    def _recognize_text_from_image(self, recognizer: VideoTextRecognizer, image_path: str) -> List[str]:
-        """Распознает текст на изображении и проверяет наличие ключевых слов."""
-        try:
-            # Используем cv2.imdecode для корректной работы с путями, содержащими не-ASCII символы
-            with open(image_path, "rb") as f:
-                img_bytes = f.read()
-            nparr = np.frombuffer(img_bytes, np.uint8)
-            frame = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
-
-            if frame is None:
-                logger.warning(f"Не удалось прочитать/декодировать изображение: {image_path}")
-                return []
-            
-            results = recognizer.easyocr_reader.readtext(frame)
-            
-            found_keywords = []
-            full_text = " ".join([res[1] for res in results])
-            text_lower = full_text.lower()
-
-            for keyword in recognizer.keywords:
-                if keyword.lower() in text_lower:
-                    found_keywords.append(keyword)
-            
-            if found_keywords:
-                logger.info(f"Найдены ключевые слова {found_keywords} в файле {image_path}")
-            return list(set(found_keywords))
-            
-        except Exception as e:
-            logger.error(f"Ошибка при распознавании текста с изображения {image_path}: {e}")
-            return []
-
     def save_and_send_lines(self):
         """Запускает полный цикл проверки скриншотов, фильтрации и отправки в Telegram."""
         try:
@@ -492,43 +450,38 @@ class MonitoringApp:
 
             self.ui.root.after(0, self.ui.update_processing_status, "Обработка: распознавание текста...")
             
-            recognizer = self.get_video_recognizer()
-            if not recognizer:
-                logger.error("Распознаватель текста (EasyOCR) не был инициализирован. Прерывание задачи.")
-                self.ui.root.after(0, messagebox.showerror, "Критическая ошибка", "Не удалось инициализировать модуль распознавания текста. Подробности в логах.")
-                self.ui.root.after(0, self.ui.update_processing_status, "Ошибка")
-                return
-
             files_with_keywords = []
             file_captions = {}
             
             all_files = list(screenshots_dir.rglob("*.[jp][pn]g")) 
             logger.info(f"Найдено {len(all_files)} скриншотов для обработки.")
             
+            keywords = self._load_keywords()
+            # Для хранения текстов уже отправленных скриншотов за сегодня
+            today_str = datetime.now().strftime('%Y%m%d')
+            sent_texts_file = f'sent_texts_{today_str}.txt'
+            sent_texts = []
+            if os.path.exists(sent_texts_file):
+                with open(sent_texts_file, 'r', encoding='utf-8') as f:
+                    sent_texts = [line.strip() for line in f if line.strip()]
+            session_texts = []  # Для хранения текстов в рамках одной обработки
             for file_path in all_files:
-                # Получаем распознанный текст и ключевые слова
-                keywords_found = self._recognize_text_from_image(recognizer, str(file_path))
-                # Для caption: распознанный текст, канал, время
-                recognized_text = ""
+                recognized_text = self._extract_text_from_image(file_path)
+                text_lower = recognized_text.lower()
+                has_keyword = any(kw in text_lower for kw in keywords)
+                is_duplicate = False
+                # Проверка на дубликаты по схожести текста (сначала по сегодняшнему файлу, потом по сессии)
+                for prev_text in sent_texts + session_texts:
+                    similarity = SequenceMatcher(None, text_lower, prev_text).ratio()
+                    if similarity > 0.8:
+                        is_duplicate = True
+                        break
                 channel = ""
                 timestamp = ""
-                if hasattr(recognizer, 'easyocr_reader'):
-                    # Попробуем получить текст через easyocr напрямую
-                    try:
-                        with open(file_path, "rb") as f:
-                            img_bytes = f.read()
-                        nparr = np.frombuffer(img_bytes, np.uint8)
-                        frame = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
-                        results = recognizer.easyocr_reader.readtext(frame)
-                        recognized_text = " ".join([res[1] for res in results])
-                    except Exception as e:
-                        logger.warning(f"Не удалось получить распознанный текст для {file_path}: {e}")
-                # Канал можно взять из имени папки (screenshots/CHANNEL/filename)
                 try:
                     channel = file_path.parent.name
                 except Exception:
                     channel = ""
-                # Время из имени файла
                 try:
                     date_pattern = r'(\d{8})_(\d{6})'
                     match = re.search(date_pattern, file_path.name)
@@ -538,23 +491,29 @@ class MonitoringApp:
                         timestamp = datetime.strptime(f"{date_str}_{time_str}", "%Y%m%d_%H%M%S").strftime("%Y-%m-%d %H:%M:%S")
                 except Exception:
                     timestamp = ""
-                if keywords_found:
+                if has_keyword and not is_duplicate:
                     try:
                         new_path = processed_dir / file_path.name
                         file_path.rename(new_path)
                         files_with_keywords.append(new_path)
-                        # Формируем caption
                         caption = f"{channel}\n{timestamp}\n{recognized_text}".strip()
                         file_captions[str(new_path)] = caption
+                        session_texts.append(text_lower)
                         logger.info(f"Файл {file_path.name} перемещен в {processed_dir}")
                     except Exception as e:
                         logger.error(f"Не удалось переместить файл {file_path.name}: {e}")
                 else:
                     try:
-                        file_path.unlink() 
-                        logger.info(f"Файл {file_path.name} удален (нет ключевых слов).")
+                        file_path.unlink()
+                        logger.info(f"Файл {file_path.name} удален (нет ключевых слов или дубликат).")
                     except Exception as e:
                         logger.error(f"Не удалось удалить файл {file_path.name}: {e}")
+            # После отправки файлов — добавляем тексты в файл за день
+            if files_with_keywords:
+                with open(sent_texts_file, 'a', encoding='utf-8') as f:
+                    for file_path in files_with_keywords:
+                        text = self._extract_text_from_image(file_path).lower()
+                        f.write(text + '\n')
             
             if not files_with_keywords:
                 self.ui.root.after(0, messagebox.showinfo, summary_title, "Обработка завершена. Файлов с ключевыми словами не найдено.")
@@ -623,6 +582,25 @@ class MonitoringApp:
             logger.error(f"Ошибка при отправке ежедневного файла в Telegram: {e}")
             self.ui.update_status(f"Ошибка отправки ежедневного файла: {str(e)}")
 
+    def _send_daily_sent_texts_to_telegram(self):
+        """Отправка файла с текстами отправленных скриншотов за день в Telegram."""
+        try:
+            today_str = datetime.now().strftime('%Y%m%d')
+            sent_texts_file = f'sent_texts_{today_str}.txt'
+            if os.path.exists(sent_texts_file):
+                logger.info(f"Отправка файла с текстами скриншотов за день в Telegram: {sent_texts_file}")
+                self.ui.update_status("Отправка файла с текстами скриншотов за день в Telegram...")
+                from telegram_sender import send_report_files
+                send_report_files(sent_texts_file, [])
+                self.ui.update_status("Файл с текстами скриншотов за день отправлен в Telegram")
+                logger.info("Файл с текстами скриншотов за день успешно отправлен в Telegram")
+            else:
+                logger.warning("Файл с текстами скриншотов за день не найден для отправки")
+                self.ui.update_status("Файл с текстами скриншотов за день не найден")
+        except Exception as e:
+            logger.error(f"Ошибка при отправке файла с текстами скриншотов за день в Telegram: {e}")
+            self.ui.update_status(f"Ошибка отправки файла с текстами скриншотов за день: {str(e)}")
+
     def _check_and_send_new_files(self):
         """Проверка и отправка новых файлов."""
         try:
@@ -683,7 +661,6 @@ class MonitoringApp:
         """Задача, выполняющая распознавание, поиск и отправку видео."""
         summary_title = "Результат проверки видео"
         try:
-            # Предварительная проверка на наличие видеофайлов
             video_dir = Path("lines_video")
             if not video_dir.exists() or not any(video_dir.glob("**/*.mp4")):
                 logger.warning("В папке lines_video нет видео для проверки.")
@@ -694,66 +671,52 @@ class MonitoringApp:
             # --- Этап 1: Распознавание текста из видео ---
             logger.info("Начало распознавания текста из видео")
             self.ui.root.after(0, self.ui.update_status, "Распознавание текста из видео...")
-            
-            recognizer = VideoTextRecognizer(
-                video_dir="lines_video",
-                output_dir="recognized_text",
-                keep_screenshots=False
-            )
-            results = recognizer.process_all_channels()
-            
-            total_texts = sum(len(texts) for texts in results.values())
-            if total_texts > 0:
-                logger.info(f"Распознавание завершено. Найдено {total_texts} текстов")
-                self.ui.root.after(0, self.ui.update_status, f"Распознано {total_texts} текстов.")
-            else:
-                logger.info("Распознавание завершено. Тексты не найдены.")
-                self.ui.root.after(0, self.ui.update_status, "Тексты в видео не найдены.")
+            self._recognize_text_in_videos_to_channel_txt(video_dir)
+            logger.info("Распознавание завершено.")
+            self.ui.root.after(0, self.ui.update_status, "Распознавание текста из видео завершено.")
 
-            # --- Этап 2: Отправка видео с ключевыми словами в Telegram ---
-            self.ui.root.after(0, self.ui.update_video_check_status, "Выполняется: Отправка в ТГ...")
-            logger.info("Начало обработки видео для отправки в Telegram")
-            self.ui.root.after(0, self.ui.update_status, "Поиск видео с ключевыми словами...")
-            
-            videos_with_keywords = self._get_videos_with_keywords()
-            
-            if not videos_with_keywords:
+            # --- Этап 2: Поиск ключевых слов и отправка видео ---
+            self.ui.root.after(0, self.ui.update_video_check_status, "Выполняется: Поиск ключевых слов...")
+            logger.info("Поиск ключевых слов и их вариаций через Hugging Face API")
+            videos_to_send = self._get_videos_with_keywords_hf_channelwise()
+
+            if not videos_to_send:
                 self.ui.root.after(0, self.ui.update_status, "Видео с ключевыми словами не найдены. Очистка...")
                 logger.info("Видео с ключевыми словами не найдены. Все видеофайлы будут удалены.")
                 self._cleanup_video_files()
+                self._cleanup_recognized_texts_channelwise()
                 self.ui.root.after(0, messagebox.showinfo, summary_title, "Проверка завершена. Видео с ключевыми словами не найдены. Все видеофайлы удалены.")
                 return
-            
-            logger.info(f"Найдено {len(videos_with_keywords)} видео с ключевыми словами")
-            self.ui.root.after(0, self.ui.update_status, f"Отправка {len(videos_with_keywords)} видео...")
-            
+
+            logger.info(f"Найдено {len(videos_to_send)} видео с ключевыми словами")
+            self.ui.root.after(0, self.ui.update_status, f"Отправка {len(videos_to_send)} видео...")
+
             sent_count = 0
-            total_to_send = len(videos_with_keywords)
-            for video_info in videos_with_keywords:
+            for video_info in videos_to_send:
                 try:
                     video_path = video_info['video_path']
                     channel_name = video_info['channel']
                     found_keywords = video_info['found_keywords']
-                    
                     if self._send_single_video_to_telegram(video_path, channel_name, found_keywords):
                         sent_count += 1
                         logger.info(f"Видео {video_path.name} отправлено в Telegram")
+                        video_path.unlink(missing_ok=True)
+                        self._remove_video_text_from_channel_txt(video_path.name, channel_name)
                     else:
                         logger.error(f"Не удалось отправить видео {video_path.name}")
-                        
                 except Exception as e:
                     logger.error(f"Ошибка при отправке видео {video_info.get('video_path', 'unknown')}: {e}")
-            
+
             self._cleanup_video_files()
-            
-            final_status_msg = f"Отправлено {sent_count} из {total_to_send} видео. Очистка завершена."
+            self._cleanup_recognized_texts_channelwise()
+
+            final_status_msg = f"Отправлено {sent_count} из {len(videos_to_send)} видео. Очистка завершена."
             self.ui.root.after(0, self.ui.update_status, final_status_msg)
             logger.info(f"Отправка завершена. Отправлено {sent_count} видео, все файлы удалены")
-            
-            summary_message = f"Отправка завершена.\n\nНайдено видео с ключевыми словами: {total_to_send}\nУспешно отправлено: {sent_count}"
-            if sent_count < total_to_send:
+
+            summary_message = f"Отправка завершена.\n\nНайдено видео с ключевыми словами: {len(videos_to_send)}\nУспешно отправлено: {sent_count}"
+            if sent_count < len(videos_to_send):
                 summary_message += "\n\nНекоторые видео не удалось отправить. Подробности смотрите в логах."
-            
             self.ui.root.after(0, messagebox.showinfo, summary_title, summary_message)
 
         except Exception as e:
@@ -765,118 +728,96 @@ class MonitoringApp:
             self.video_recognition_running = False
             self.ui.root.after(0, self.ui.update_video_check_status, "Завершено")
 
-    def _get_videos_with_keywords(self):
-        """Получение списка видео файлов с ключевыми словами."""
-        videos_with_keywords = []
-        video_dir = Path("lines_video") # Используем lines_video
-        
-        try:
-            if not video_dir.exists():
-                logger.warning("Папка lines_video не найдена")
-                return videos_with_keywords
-            
-            for channel_dir in video_dir.iterdir():
-                if not channel_dir.is_dir():
-                    continue
-                channel_name = channel_dir.name
-                
-                for video_file in channel_dir.glob("*.mp4"):
-                    try:
-                        keywords = self._get_video_keywords(video_file)
-                        if keywords:
-                            videos_with_keywords.append({
-                                'video_path': video_file,
-                                'channel': channel_name,
-                                'found_keywords': keywords
-                            })
-                            logger.info(f"Видео {video_file.name} содержит ключевые слова: {keywords}")
-                    except Exception as e:
-                        logger.error(f"Ошибка при проверке видео {video_file}: {e}")
-            
-        except Exception as e:
-            logger.error(f"Ошибка при поиске видео с ключевыми словами: {e}")
-        
-        return videos_with_keywords
-
-    def _get_video_keywords(self, video_file):
-        """Получение списка ключевых слов для видео."""
-        all_keywords = set()
+    def _recognize_text_in_videos_to_channel_txt(self, video_dir):
+        """Распознаёт текст из всех видеофайлов в lines_video и сохраняет результаты в отдельные txt по каналам."""
         recognized_dir = Path("recognized_text")
-        if not recognized_dir.exists():
-            return []
-        
-        video_name_stem = video_file.stem
-        
-        try:
-            # Ищем JSON-файл, который соответствует видео
-            # Имя файла с результатами может быть длиннее, например, video_name_channel_timestamp.json
-            for json_file in recognized_dir.glob(f"*{video_name_stem}*.json"):
-                with open(json_file, 'r', encoding='utf-8') as f:
-                    data = json.load(f)
-                
-                # Структура JSON: список словарей
-                if isinstance(data, list):
-                    for item in data:
-                        # Убедимся, что это результат для нашего видеофайла
-                        if item.get('video_file') == video_file.name:
-                            found_keywords = item.get('found_keywords', [])
-                            if found_keywords:
-                                all_keywords.update(found_keywords)
-        except Exception as e:
-            logger.error(f"Ошибка при чтении ключевых слов из JSON для видео {video_file.name}: {e}")
-        
-        return list(all_keywords)
+        recognized_dir.mkdir(exist_ok=True)
+        channel_files = {}
+        for channel_dir in video_dir.iterdir():
+            if not channel_dir.is_dir():
+                continue
+            channel_name = channel_dir.name
+            txt_path = recognized_dir / f"{channel_name}.txt"
+            if channel_name not in channel_files:
+                channel_files[channel_name] = open(txt_path, 'w', encoding='utf-8')
+            txt_file = channel_files[channel_name]
+            for video_file in channel_dir.glob("*.mp4"):
+                try:
+                    cap = cv2.VideoCapture(str(video_file))
+                    if not cap.isOpened():
+                        logger.warning(f"Не удалось открыть видео {video_file}")
+                        continue
+                    frame_count = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
+                    fps = cap.get(cv2.CAP_PROP_FPS)
+                    step = int(fps * 2) if fps > 0 else 50  # Кадр каждые 2 секунды
+                    recognized_texts = []
+                    frame_idx = 0
+                    while True:
+                        ret, frame = cap.read()
+                        if not ret:
+                            break
+                        if frame_idx % step == 0:
+                            gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+                            text = pytesseract.image_to_string(gray, lang='rus+eng')
+                            recognized_texts.append(text.replace('\n', ' '))
+                        frame_idx += 1
+                    cap.release()
+                    all_text = ' '.join(recognized_texts).replace('\n', ' ')
+                    txt_file.write(f"{video_file.name}\t{all_text}\n")
+                    logger.info(f"Распознан текст для {video_file.name}")
+                except Exception as e:
+                    logger.error(f"Ошибка при распознавании текста в {video_file}: {e}")
+        for f in channel_files.values():
+            f.close()
 
-    def _send_single_video_to_telegram(self, video_path, channel_name, found_keywords):
-        """Отправка одного видео файла в Telegram."""
-        try:
-            keywords_text = ", ".join(found_keywords) if found_keywords else "не указаны"
-            caption = f"Канал: {channel_name}\nКлючевые слова: {keywords_text}\nФайл: {video_path.name}"
-            
-            from telegram_sender import send_files
-            return send_files([str(video_path)], caption=caption)
-            
-        except Exception as e:
-            logger.error(f"Ошибка при отправке видео {video_path}: {e}")
-            return False
-
-    def _cleanup_video_files(self):
-        """Удаление всех видео файлов после обработки из lines_video."""
-        try:
-            video_dir = Path("lines_video")
-            if not video_dir.exists():
-                return
-            
-            deleted_count = 0
-            
-            for channel_dir in video_dir.iterdir():
-                if not channel_dir.is_dir():
-                    continue
-                
-                for video_file in channel_dir.glob("*.mp4"):
+    def _get_videos_with_keywords_hf_channelwise(self):
+        """Проверяет recognized_text/<channel>.txt на наличие ключевых слов и их вариаций через Hugging Face API."""
+        recognized_dir = Path("recognized_text")
+        keywords = list(self._load_keywords())
+        videos_to_send = []
+        for txt_path in recognized_dir.glob("*.txt"):
+            channel_name = txt_path.stem
+            with open(txt_path, 'r', encoding='utf-8') as f:
+                for line in f:
                     try:
-                        video_file.unlink()
-                        deleted_count += 1
-                        logger.info(f"Удален видео файл: {video_file}")
+                        video_file, text = line.strip().split('\t', 1)
+                        found_keywords = self._find_keywords_hf(text, keywords)
+                        if found_keywords:
+                            videos_to_send.append({
+                                'video_path': Path("lines_video") / channel_name / video_file,
+                                'channel': channel_name,
+                                'found_keywords': found_keywords
+                            })
                     except Exception as e:
-                        logger.error(f"Ошибка при удалении {video_file}: {e}")
-            
-            logger.info(f"Удалено {deleted_count} видео файлов")
-            
-        except Exception as e:
-            logger.error(f"Ошибка при очистке видео файлов: {e}")
+                        logger.error(f"Ошибка при обработке строки recognized_text/{txt_path.name}: {e}")
+        return videos_to_send
+
+    def _remove_video_text_from_channel_txt(self, video_file_name, channel_name):
+        """Удаляет строку из recognized_text/<channel>.txt по имени видеофайла."""
+        txt_path = Path("recognized_text") / f"{channel_name}.txt"
+        if not txt_path.exists():
+            return
+        lines = []
+        with open(txt_path, 'r', encoding='utf-8') as f:
+            lines = f.readlines()
+        with open(txt_path, 'w', encoding='utf-8') as f:
+            for line in lines:
+                if not line.startswith(video_file_name + '\t'):
+                    f.write(line)
+
+    def _cleanup_recognized_texts_channelwise(self):
+        """Удаляет все recognized_text/<channel>.txt файлы."""
+        recognized_dir = Path("recognized_text")
+        for txt_path in recognized_dir.glob("*.txt"):
+            try:
+                txt_path.unlink()
+            except Exception:
+                pass
 
     def cleanup(self):
         """Очистка ресурсов при закрытии приложения."""
         try:
             logger.info("Начало очистки ресурсов...")
-            
-            # Останавливаем auto_recorder
-            if self.auto_recorder_process:
-                logger.info("Остановка процесса auto_recorder.py...")
-                self.auto_recorder_process.terminate()
-                self.auto_recorder_process.wait(timeout=5)
-                logger.info("Процесс auto_recorder.py остановлен.")
             
             # Останавливаем планировщик
             if self.scheduler_running:
@@ -1011,6 +952,75 @@ class MonitoringApp:
             self.video_processing_running = False
             # Статус уже обновлен, но можно поставить "Ожидание", если нужно
             # self.ui.root.after(0, self.ui.update_video_processing_status, "Ожидание")
+
+    def _extract_text_from_image(self, image_path):
+        try:
+            img = cv2.imread(str(image_path))
+            if img is None:
+                return ""
+            gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+            text = pytesseract.image_to_string(gray, lang='rus+eng')
+            return text
+        except Exception as e:
+            logger.error(f"Ошибка при извлечении текста из {image_path}: {e}")
+            return ""
+
+    def _load_keywords(self):
+        try:
+            with open('keywords.json', 'r', encoding='utf-8') as f:
+                data = json.load(f)
+                return set(word.lower() for word in data['keywords'])
+        except Exception as e:
+            logger.error(f"Ошибка при загрузке ключевых слов: {e}")
+            return set()
+
+    def _find_keywords_hf(self, text, keywords):
+        """Использует Hugging Face Inference API (Qwen/Qwen2.5-VL-7B-Instruct) для поиска вариаций ключевых слов в тексте."""
+        HF_API_URL = "https://api-inference.huggingface.co/models/Qwen/Qwen2.5-VL-7B-Instruct"
+        HF_API_TOKEN = os.environ.get("HF_API_TOKEN")  # Токен должен быть в переменных окружения
+        headers = {"Authorization": f"Bearer {HF_API_TOKEN}"}
+        found = []
+        for kw in keywords:
+            prompt = (
+                f"Instruction: Найди, встречается ли ключевое слово или его смысловая вариация в этом тексте?\n"
+                f"Ключевое слово: \"{kw}\"\n"
+                f"Текст: \"{text}\"\n"
+                f"Ответь только 'yes' или 'no'."
+            )
+            payload = {"inputs": prompt}
+            try:
+                response = requests.post(HF_API_URL, headers=headers, json=payload, timeout=60)
+                if response.status_code == 200:
+                    result = response.json()
+                    # Ответ может быть строкой или списком с dict/text
+                    answer = ""
+                    if isinstance(result, dict) and "generated_text" in result:
+                        answer = result["generated_text"].strip().lower()
+                    elif isinstance(result, list) and result and "generated_text" in result[0]:
+                        answer = result[0]["generated_text"].strip().lower()
+                    elif isinstance(result, str):
+                        answer = result.strip().lower()
+                    if "yes" in answer:
+                        found.append(kw)
+                else:
+                    logger.warning(f"HF API error: {response.status_code} {response.text}")
+            except Exception as e:
+                logger.error(f"Ошибка Hugging Face API: {e}")
+        return found
+
+    def _cleanup_video_files(self):
+        """Удаляет все видеофайлы из lines_video, если они остались."""
+        video_dir = Path("lines_video")
+        if not video_dir.exists():
+            return
+        for channel_dir in video_dir.iterdir():
+            if not channel_dir.is_dir():
+                continue
+            for video_file in channel_dir.glob("*.mp4"):
+                try:
+                    video_file.unlink()
+                except Exception:
+                    pass
 
 class StatusHandler(BaseHTTPRequestHandler):
     def __init__(self, ui_instance, *args, **kwargs):
