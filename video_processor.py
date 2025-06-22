@@ -4,9 +4,10 @@ import subprocess
 import logging
 from pathlib import Path
 import sys
-from datetime import timedelta
+from datetime import timedelta, datetime
 import requests
 from typing import Optional, TYPE_CHECKING, Any
+import argparse
 
 if TYPE_CHECKING:
     from natasha import MorphVocab
@@ -35,6 +36,7 @@ VIDEO_SOURCE_DIR = Path("TV_video")
 VIDEO_PROCESSED_DIR = VIDEO_SOURCE_DIR / "processed"
 KEYWORDS_FILE = Path("keywords.json")
 TEMP_DIR = Path("temp_processing")
+RECOGNIZED_TEXT_DIR = Path("recognized_text")
 
 # --- Hugging Face API ---
 # !!! ВАШ ТОКЕН ДОСТУПА HUGGING FACE !!!
@@ -46,6 +48,7 @@ API_URL = "https://api-inference.huggingface.co/models/openai/whisper-large-v3"
 # Создаем необходимые директории
 VIDEO_PROCESSED_DIR.mkdir(exist_ok=True)
 TEMP_DIR.mkdir(exist_ok=True)
+RECOGNIZED_TEXT_DIR.mkdir(exist_ok=True)
 
 # --- Основная логика ---
 
@@ -221,6 +224,36 @@ def cut_video_segment(original_video: Path, segment: dict, output_path: Path) ->
         return False
 
 
+def save_results_as_txt(results: list, channel_name: str, video_file: str = None) -> str:
+    """
+    Сохраняет результаты распознавания в txt-файл в папке recognized_text.
+    Один файл на видео, с таймкодами и текстом.
+    """
+    if not results:
+        logger.warning("Нет результатов для сохранения в txt")
+        return ""
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    base_name = f"{channel_name}_recognized_text_{timestamp}"
+    if video_file:
+        base_name = f"{channel_name}_{Path(video_file).stem}_recognized_text_{timestamp}"
+    output_path = RECOGNIZED_TEXT_DIR / f"{base_name}.txt"
+    try:
+        with open(output_path, 'w', encoding='utf-8') as f:
+            for i, res in enumerate(results, 1):
+                start = res.get('start') or res.get('start_time')
+                end = res.get('end') or res.get('end_time')
+                text = res.get('text', '')
+                f.write(f"Сюжет {i}\n")
+                if start is not None and end is not None:
+                    f.write(f"Время: {start:.2f} - {end:.2f} сек\n")
+                f.write(f"Текст: {text}\n\n")
+        logger.info(f"Результаты сохранены в txt: {output_path}")
+        return str(output_path)
+    except Exception as e:
+        logger.error(f"Ошибка при сохранении результатов в txt: {e}")
+        return ""
+
+
 def process_all_videos():
     """Основной цикл обработки всех видео."""
     logger.info("Запуск процесса обработки видеосюжетов...")
@@ -275,6 +308,8 @@ def process_all_videos():
                         
                         # Удаляем временный вырезанный фрагмент
                         cut_video_path.unlink()
+                # Сохраняем текстовые результаты
+                save_results_as_txt(found_segments, channel_name, video_file.name)
             else:
                 logger.info(f"В файле {video_file.name} сюжетов с ключевыми словами не найдено.")
 
@@ -290,8 +325,87 @@ def process_all_videos():
     logger.info("Все видеосюжеты обработаны.")
 
 
-if __name__ == "__main__":
+def process_single_video(video_path_str, channel_name):
+    """Обработка одного видеофайла для указанного канала."""
+    logger.info(f"Обработка одного видео: {video_path_str} для канала {channel_name}")
+    video_path = Path(video_path_str)
+    if not video_path.exists():
+        logger.error(f"Файл не найден: {video_path}")
+        return
     try:
-        process_all_videos()
+        morph = MorphVocab() if 'MorphVocab' in globals() and MorphVocab else None
+        keywords = get_normalized_keywords(morph)
+        temp_audio = TEMP_DIR / f"{video_path.stem}.mp3"
+        if not extract_audio(video_path, temp_audio):
+            return
+        segments = transcribe_audio_with_segments(temp_audio)
+        found_segments = find_segments_with_keywords(segments, keywords, morph)
+        if found_segments:
+            logger.info(f"Найдено {len(found_segments)} сюжетов с ключевыми словами в {video_path.name}")
+            for i, segment in enumerate(found_segments):
+                cut_video_path = TEMP_DIR / f"{video_path.stem}_сюжет_{i+1}.mp4"
+                if cut_video_segment(video_path, segment, cut_video_path):
+                    start_td = timedelta(seconds=int(segment['start']))
+                    end_td = timedelta(seconds=int(segment['end']))
+                    caption = (
+                        f"📺 Телеканал: {channel_name}\n"
+                        f"🕒 Время сюжета: {start_td} - {end_td}\n\n"
+                        f"📜 Распознанный текст:\n{segment['text']}"
+                    )
+                    logger.info("Отправка сюжета в Telegram...")
+                    if send_files([str(cut_video_path)], caption=caption):
+                        logger.info("Сюжет успешно отправлен.")
+                    else:
+                        logger.error("Не удалось отправить сюжет.")
+                    cut_video_path.unlink()
+            # Сохраняем текстовые результаты
+            save_results_as_txt(found_segments, channel_name, video_path.name)
+        else:
+            logger.info(f"В файле {video_path.name} сюжетов с ключевыми словами не найдено.")
+        temp_audio.unlink()
+        # Перемещаем обработанное видео
+        processed_channel_dir = VIDEO_PROCESSED_DIR / channel_name
+        processed_channel_dir.mkdir(exist_ok=True)
+        video_path.rename(processed_channel_dir / video_path.name)
+        logger.info(f"--- Файл {video_path.name} обработан и перемещен. ---\n")
     except Exception as e:
-        logger.critical(f"Произошла критическая ошибка в процессе обработки видео: {e}", exc_info=True) 
+        logger.critical(f"Ошибка при обработке одного видео: {e}", exc_info=True)
+
+
+if __name__ == "__main__":
+    parser = argparse.ArgumentParser(description="Video processor for TV news segments.")
+    parser.add_argument('--single', nargs=2, metavar=('VIDEO_PATH', 'CHANNEL_NAME'), help='Обработать только один видеофайл для указанного канала')
+    parser.add_argument('--check-keywords-only', action='store_true', help='Только проверить наличие ключевых слов, не отправлять и не сохранять')
+    args = parser.parse_args()
+
+    if args.single:
+        video_path_str, channel_name = args.single
+        if args.check_keywords_only:
+            # Только проверка на ключевые слова, ничего не сохраняем и не отправляем
+            video_path = Path(video_path_str)
+            if not video_path.exists():
+                sys.exit(1)
+            try:
+                morph = MorphVocab() if 'MorphVocab' in globals() and MorphVocab else None
+                keywords = get_normalized_keywords(morph)
+                temp_audio = TEMP_DIR / f"{video_path.stem}.mp3"
+                if not extract_audio(video_path, temp_audio):
+                    sys.exit(1)
+                segments = transcribe_audio_with_segments(temp_audio)
+                found_segments = find_segments_with_keywords(segments, keywords, morph)
+                temp_audio.unlink(missing_ok=True)
+                if found_segments:
+                    print("FOUND_KEYWORDS")
+                    sys.exit(0)
+                else:
+                    sys.exit(2)
+            except Exception as e:
+                logger.critical(f"Ошибка при быстрой проверке ключевых слов: {e}", exc_info=True)
+                sys.exit(1)
+        else:
+            process_single_video(video_path_str, channel_name)
+    else:
+        try:
+            process_all_videos()
+        except Exception as e:
+            logger.critical(f"Произошла критическая ошибка в процессе обработки видео: {e}", exc_info=True) 

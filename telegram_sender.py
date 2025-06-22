@@ -126,10 +126,20 @@ async def send_to_telegram(excel_file, screenshot_files):
             raise Exception("No available chats found")
 
         # Send Excel file and recognized text
+        recognized_texts = {}
+        recognized_channels = {}
+        recognized_times = {}
         if os.path.exists(excel_file):
             try:
                 # Читаем Excel файл
                 df = pd.read_excel(excel_file)
+                # Сопоставляем имя файла с текстом, каналом и временем
+                for _, row in df.iterrows():
+                    if 'Source' in row and 'Text' in row:
+                        fname = os.path.basename(str(row['Source']))
+                        recognized_texts[fname] = str(row['Text'])
+                        recognized_channels[fname] = str(row['Channel']) if 'Channel' in row else ''
+                        recognized_times[fname] = str(row['Timestamp']) if 'Timestamp' in row else ''
                 
                 # Формируем сообщение с распознанными строками
                 if not df.empty:
@@ -176,7 +186,18 @@ async def send_to_telegram(excel_file, screenshot_files):
                     logger.info(f"Found {len(screenshot_files)} screenshot files to send")
                     for screenshots in screenshot_files:
                         for screenshot in screenshots:
-                            screenshot_path = os.path.join(processed_dir, screenshot)
+                            # Определяем путь и текст
+                            if isinstance(screenshot, dict):
+                                screenshot_path = screenshot.get('path')
+                                caption = screenshot.get('text', '')
+                            else:
+                                screenshot_path = os.path.join(processed_dir, screenshot)
+                                fname = os.path.basename(screenshot_path)
+                                text = recognized_texts.get(fname, '')
+                                channel = recognized_channels.get(fname, '')
+                                timestamp = recognized_times.get(fname, '')
+                                # Формируем подпись
+                                caption = f"{channel}\n{timestamp}\n{text}".strip()
                             if os.path.exists(screenshot_path):
                                 try:
                                     # Отправляем скриншот как документ
@@ -186,17 +207,17 @@ async def send_to_telegram(excel_file, screenshot_files):
                                                 await bot.send_document(
                                                     chat_id=chat_id,
                                                     document=f,
-                                                    caption=f"Screenshot: {screenshot}",
+                                                    caption=caption if caption else None,
                                                     parse_mode=ParseMode.HTML
                                                 )
-                                                logger.info(f"Sent screenshot {screenshot} to Telegram chat {chat_id}")
+                                                logger.info(f"Sent screenshot {screenshot_path} to Telegram chat {chat_id}")
                                             except Exception as e:
                                                 logger.error(f"Error sending screenshot to chat {chat_id}: {e}")
                                     sent_files.append(screenshot_path)
                                 except Exception as e:
-                                    logger.error(f"Error sending screenshot {screenshot}: {e}")
+                                    logger.error(f"Error sending screenshot {screenshot_path}: {e}")
                             else:
-                                logger.warning(f"Screenshot {screenshot} not found at {screenshot_path}")
+                                logger.warning(f"Screenshot {screenshot_path} not found")
                 else:
                     logger.info("No screenshots to send")
 

@@ -18,6 +18,8 @@ import shutil
 import sys
 import easyocr
 from difflib import SequenceMatcher
+import schedule
+import time
 
 logger = logging.getLogger(__name__)
 
@@ -238,24 +240,39 @@ async def is_readable_text(text, image_path):
         logger.info("Используется упрощенная проверка текста")
         return len(words) >= 2 and len(clean_text.strip()) >= 5, text
 
+def load_daily_texts():
+    """Загружает все тексты, распознанные за текущий день из daily_lines_YYYY-MM-DD.xlsx."""
+    file_path = get_daily_file_path()
+    if os.path.exists(file_path):
+        try:
+            df = pd.read_excel(file_path)
+            return set(str(t).strip() for t in df['Text'].dropna())
+        except Exception as e:
+            logger.error(f"Ошибка при загрузке ежедневного файла: {e}")
+            return set()
+    return set()
+
 class TextDuplicateChecker:
-    def __init__(self, similarity_threshold=0.9):
+    def __init__(self, similarity_threshold=0.8):
         self.similarity_threshold = similarity_threshold
-        self.texts_by_channel = defaultdict(set)  # Хранит тексты по каналам
-        self.text_hashes = set()  # Хранит хеши всех текстов
-        
+        self.texts_by_channel = defaultdict(set)  # Хранит тексты по каналам (текущая сессия)
+        self.text_hashes = set()  # Хранит хеши всех текстов (текущая сессия)
+        self.daily_texts = load_daily_texts()  # Тексты за день
+
     async def is_duplicate(self, text, channel_name):
-        """Проверяет, является ли текст дубликатом."""
-        # Сначала проверяем точное совпадение по хешу
+        """Проверяет, является ли текст дубликатом (по базе за день и текущей сессии)."""
+        # Проверка по базе за день
+        for old_text in self.daily_texts:
+            if SequenceMatcher(None, text, old_text).ratio() > self.similarity_threshold:
+                logger.info(f"Обнаружен дубликат с текстом из daily_lines: {old_text[:50]}...")
+                return True
+        # Проверка по текущей сессии (точный хеш и схожесть)
         text_hash = hashlib.sha256(text.encode('utf-8')).hexdigest()
         if text_hash in self.text_hashes:
             return True
-            
-        # Затем проверяем похожесть текста
         for existing_text in self.texts_by_channel[channel_name]:
             if await is_similar_text(text, existing_text, self.similarity_threshold):
                 return True
-                
         # Если дубликат не найден, добавляем текст в хранилище
         self.texts_by_channel[channel_name].add(text)
         self.text_hashes.add(text_hash)
@@ -492,3 +509,24 @@ async def process_screenshots(base_dir="screenshots"):
     except Exception as e:
         logger.error(f"Ошибка при обработке файлов: {e}")
         return None, None
+
+def delete_daily_file():
+    """Удаляет ежедневный файл за текущий день."""
+    file_path = get_daily_file_path()
+    if os.path.exists(file_path):
+        try:
+            os.remove(file_path)
+            logger.info(f"Удалён ежедневный файл: {file_path}")
+        except Exception as e:
+            logger.error(f"Ошибка при удалении ежедневного файла: {e}")
+    else:
+        logger.info(f"Файл для удаления не найден: {file_path}")
+
+if __name__ == "__main__":
+    # ... существующий код ...
+    # Планировщик для удаления ежедневного файла в 23:50
+    schedule.every().day.at("23:50").do(delete_daily_file)
+    while True:
+        schedule.run_pending()
+        time.sleep(30)
+    # ... existing code ...
