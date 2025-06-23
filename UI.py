@@ -74,8 +74,6 @@ class MonitoringUI:
         scheduler_frame.pack(fill="x", padx=(30,10), pady=5)
         self.scheduler_status = ttk.Label(scheduler_frame, text="Планировщик: Активен")
         self.scheduler_status.pack(fill="x", pady=5)
-        self.auto_recorder_status = ttk.Label(scheduler_frame, text="Авто-рекордер сюжетов: Ожидание")
-        self.auto_recorder_status.pack(fill="x", pady=5)
         
         scheduler_btn_frame = ttk.Frame(scheduler_frame)
         scheduler_btn_frame.pack(fill="x", pady=5)
@@ -113,17 +111,6 @@ class MonitoringUI:
         self.check_and_send_video_button.pack(fill="x", pady=2)
         self.video_check_status = ttk.Label(rbk_mir24_frame, text="Статус проверки: Ожидание")
         self.video_check_status.pack(fill="x", pady=5)
-        
-        processing_frame = ttk.LabelFrame(self.sidebar, text="Обработка файлов", padding=10)
-        processing_frame.pack(fill="x", padx=10, pady=5)
-        
-        self.processing_status = ttk.Label(processing_frame, text="Статус (скриншоты): Ожидание")
-        self.processing_status.pack(fill="x", pady=5)
-
-        self.process_videos_button = ttk.Button(processing_frame, text="Обработать сюжеты", command=self.app.start_video_processing)
-        self.process_videos_button.pack(fill="x", pady=5)
-        self.video_processing_status = ttk.Label(processing_frame, text="Статус (сюжеты): Ожидание")
-        self.video_processing_status.pack(fill="x", pady=5)
         
         self.status_label = ttk.Label(self.sidebar, text="Готов к работе")
         self.status_label.pack(side="bottom", fill="x", padx=10, pady=5)
@@ -422,9 +409,6 @@ class MonitoringUI:
     def update_scheduler_status(self, status):
         self.scheduler_status.config(text=f"Планировщик: {status}")
             
-    def update_auto_recorder_status(self, status):
-        self.auto_recorder_status.config(text=f"Авто-рекордер сюжетов: {status}")
-            
     def update_status(self, message):
         self.status_label.config(text=message)
         
@@ -638,11 +622,3 @@ class MonitoringUI:
         else:
             self.pause_scheduler_button.config(state="normal")
             self.resume_scheduler_button.config(state="disabled")
-
-    def update_video_processing_status(self, status):
-        """Обновление статуса обработки видеосюжетов."""
-        self.video_processing_status.config(text=f"Статус (сюжеты): {status}")
-        if "Выполняется" in status:
-            self.process_videos_button.config(state="disabled")
-        else:
-            self.process_videos_button.config(state="normal")

@@ -57,59 +57,25 @@ class MonitoringApp:
         self.scheduler_paused = False
         self.start_time = time_module.time()
         self.last_lines_activity_time = self.start_time
-
         self.rbk_mir24_task = None
         self.rbk_mir24_running = False
         self.process_list = []
         self.recording_channels = []
-        
         self.lines_monitoring_thread = None
         self.lines_monitoring_running = False
-
-        # Переменные для обработки сюжетов
         self.video_processing_thread = None
         self.video_processing_running = False
-        
-        # Для запуска auto_recorder.py
-        self.auto_recorder_process = None
-
-        # Для видео-проверки (check_and_send_videos)
         self.video_recognition_running = False
-
-        # Инициализируем event loop
         self.loop = asyncio.new_event_loop()
         asyncio.set_event_loop(self.loop)
-        
-        # Запускаем event loop в отдельном потоке
         self.thread = threading.Thread(
             target=self.loop.run_forever,
             daemon=True
         )
         self.thread.start()
-
-        # Создаем и запускаем UI
         self.ui = MonitoringUI(self)
-        
-        # Запускаем HTTP сервер для статусов
         self.start_status_server()
-        
-        # Запускаем планировщик
         self.start_scheduler()
-        
-        # Запускаем авто-рекордер
-        self.start_auto_recorder()
-
-    def start_auto_recorder(self):
-        """Запускает auto_recorder.py в отдельном процессе."""
-        try:
-            python_executable = sys.executable
-            script_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "auto_recorder.py")
-            self.auto_recorder_process = subprocess.Popen([python_executable, script_path])
-            logger.info(f"Процесс auto_recorder.py запущен с PID: {self.auto_recorder_process.pid}")
-            self.ui.update_auto_recorder_status("Активен")
-        except Exception as e:
-            logger.error(f"Не удалось запустить auto_recorder.py: {e}")
-            self.ui.update_auto_recorder_status(f"Ошибка: {e}")
 
     def start_status_server(self):
         """Запускает HTTP-сервер для получения статусов от дочерних процессов."""
@@ -124,222 +90,6 @@ class MonitoringApp:
             logger.info("HTTP-сервер для статусов запущен на порту 8989")
         except Exception as e:
             logger.error(f"Не удалось запустить HTTP-сервер: {e}")
-
-    def start_scheduler(self):
-        """Запуск планировщика задач."""
-        if not self.scheduler_running:
-            self.scheduler_running = True
-            self.scheduler_thread = threading.Thread(
-                target=self._run_scheduler,
-                daemon=True
-            )
-            self.scheduler_thread.start()
-            logger.info("Планировщик задач запущен")
-
-    def _run_scheduler(self):
-        logger.info("Настройка расписания задач...")
-        self.ui.update_scheduler_status("Настройка расписания...")
-        
-        # Загрузка расписания из channels.json
-        with open("channels.json", "r", encoding="utf-8") as f:
-            channels = json.load(f)
-
-        # Сопоставление каналов с методами запуска
-        channel_methods = {
-            "R1": self._start_r1_monitoring,
-            "Zvezda": self._start_zvezda_monitoring,
-            "TVC": self._start_other_channels_monitoring,
-            "RenTV": self._start_other_channels_monitoring,
-            "NTV": self._start_other_channels_monitoring,
-        }
-
-        for channel, info in channels.items():
-            # Этот планировщик отвечает ТОЛЬКО за 'lines'
-            lines_times = set(info.get("lines", []))
-            schedule_times = set(info.get("schedule", []))
-            
-            if not lines_times:
-                continue
-
-            method = channel_methods.get(channel)
-            if method:
-                for t in lines_times:
-                    if t in schedule_times:
-                        logger.info(f"Пропуск расписания 'lines' для {channel} в {t}, так как оно совпадает с 'schedule'. Запись сюжета будет выполнена.")
-                        continue
-                    
-                    schedule.every().day.at(t).do(method)
-                    logger.info(f"Добавлено расписание для {channel} ('lines'): {t}")
-
-        # Настройка отправки ежедневного файла в Telegram
-        schedule.every().day.at("22:00").do(self._send_daily_file_to_telegram)
-        logger.info("Добавлено расписание отправки ежедневного файла в Telegram: 22:00")
-
-        # Новое: отправка файла с текстами скриншотов за день в 23:00
-        schedule.every().day.at("23:00").do(self._send_daily_sent_texts_to_telegram)
-        logger.info("Добавлено расписание отправки sent_texts_YYYYMMDD.txt в Telegram: 23:00")
-
-        logger.info("Расписание настроено, начинаем выполнение...")
-        self.ui.update_scheduler_status("Активен")
-        while self.scheduler_running:
-            try:
-                if not self.scheduler_paused:
-                    schedule.run_pending()
-                
-                # Проверка неактивности мониторинга строк
-                self._check_and_start_idle_monitoring()
-
-                time_module.sleep(1)
-            except Exception as e:
-                logger.error(f"Ошибка в планировщике: {e}")
-                self.ui.update_scheduler_status(f"Ошибка: {str(e)}")
-
-    def _start_r1_monitoring(self):
-        """Запуск мониторинга для R1."""
-        logger.info("Попытка запуска мониторинга R1...")
-        self.ui.update_lines_scheduler_status("Запуск R1...")
-        if not self.lines_monitoring_running:
-            try:
-                self.lines_monitoring_running = True
-                self.last_lines_activity_time = time_module.time()
-                start_force_capture()
-                self.lines_monitoring_thread = threading.Thread(
-                    target=start_lines_monitoring,
-                    daemon=True
-                )
-                self.lines_monitoring_thread.start()
-                logger.info("Запущен мониторинг R1 по расписанию")
-                self.ui.update_lines_scheduler_status("R1 активен")
-                
-                # Запускаем периодическую проверку новых файлов
-                def check_files():
-                    while self.lines_monitoring_running:
-                        self._check_and_send_new_files()
-                        time_module.sleep(30)  # Проверяем каждые 30 секунд
-                
-                self.check_files_thread = threading.Thread(target=check_files, daemon=True)
-                self.check_files_thread.start()
-                
-                # Останавливаем через 30 минут
-                threading.Timer(1800, self._process_and_send_screenshots).start()
-            except Exception as e:
-                logger.error(f"Ошибка при запуске мониторинга R1: {e}")
-                self.lines_monitoring_running = False
-                self.ui.update_lines_scheduler_status(f"Ошибка R1: {str(e)}")
-        else:
-            logger.warning("Мониторинг уже запущен, пропускаем запуск R1")
-            self.ui.update_lines_scheduler_status("R1 пропущен (уже запущен)")
-
-    def _start_zvezda_monitoring(self):
-        """Запуск мониторинга для Zvezda."""
-        logger.info("Попытка запуска мониторинга Zvezda...")
-        self.ui.update_lines_scheduler_status("Запуск Zvezda...")
-        if not self.lines_monitoring_running:
-            try:
-                self.lines_monitoring_running = True
-                self.last_lines_activity_time = time_module.time()
-                start_force_capture()
-                self.lines_monitoring_thread = threading.Thread(
-                    target=start_lines_monitoring,
-                    daemon=True
-                )
-                self.lines_monitoring_thread.start()
-                logger.info("Запущен мониторинг Zvezda по расписанию")
-                self.ui.update_lines_scheduler_status("Zvezda активен")
-                
-                # Запускаем периодическую проверку новых файлов
-                def check_files():
-                    while self.lines_monitoring_running:
-                        self._check_and_send_new_files()
-                        time_module.sleep(30)  # Проверяем каждые 30 секунд
-                
-                self.check_files_thread = threading.Thread(target=check_files, daemon=True)
-                self.check_files_thread.start()
-                
-                # Останавливаем через 10 минут
-                threading.Timer(600, self._process_and_send_screenshots).start()
-            except Exception as e:
-                logger.error(f"Ошибка при запуске мониторинга Zvezda: {e}")
-                self.lines_monitoring_running = False
-                self.ui.update_lines_scheduler_status(f"Ошибка Zvezda: {str(e)}")
-        else:
-            logger.warning("Мониторинг уже запущен, пропускаем запуск Zvezda")
-            self.ui.update_lines_scheduler_status("Zvezda пропущен (уже запущен)")
-
-    def _start_other_channels_monitoring(self):
-        """Запуск мониторинга для остальных каналов."""
-        logger.info("Попытка запуска мониторинга остальных каналов...")
-        self.ui.update_lines_scheduler_status("Запуск других каналов...")
-        if not self.lines_monitoring_running:
-            try:
-                self.lines_monitoring_running = True
-                self.last_lines_activity_time = time_module.time()
-                start_force_capture()
-                self.lines_monitoring_thread = threading.Thread(
-                    target=start_lines_monitoring,
-                    daemon=True
-                )
-                self.lines_monitoring_thread.start()
-                logger.info("Запущен мониторинг остальных каналов по расписанию")
-                self.ui.update_lines_scheduler_status("Другие каналы активны")
-                
-                # Запускаем периодическую проверку новых файлов
-                def check_files():
-                    while self.lines_monitoring_running:
-                        self._check_and_send_new_files()
-                        time_module.sleep(30)  # Проверяем каждые 30 секунд
-                
-                self.check_files_thread = threading.Thread(target=check_files, daemon=True)
-                self.check_files_thread.start()
-                
-                # Останавливаем через 20 минут
-                threading.Timer(1200, self._process_and_send_screenshots).start()
-            except Exception as e:
-                logger.error(f"Ошибка при запуске мониторинга остальных каналов: {e}")
-                self.lines_monitoring_running = False
-                self.ui.update_lines_scheduler_status(f"Ошибка других каналов: {str(e)}")
-        else:
-            logger.warning("Мониторинг уже запущен, пропускаем запуск остальных каналов")
-            self.ui.update_lines_scheduler_status("Другие каналы пропущены (уже запущены)")
-
-    def start_lines_monitoring(self):
-        """Запуск мониторинга строк по кнопке."""
-        logger.info("Попытка запуска мониторинга по кнопке...")
-        if not self.lines_monitoring_running:
-            try:
-                self.lines_monitoring_running = True
-                self.last_lines_activity_time = time_module.time()
-                start_force_capture()
-                self.lines_monitoring_thread = threading.Thread(
-                    target=start_lines_monitoring,
-                    daemon=True
-                )
-                self.lines_monitoring_thread.start()
-                self.ui.update_lines_status("Запущен")
-                logger.info("Запущен мониторинг строк по кнопке")
-            except Exception as e:
-                logger.error(f"Ошибка при запуске мониторинга по кнопке: {e}")
-                self.lines_monitoring_running = False
-                messagebox.showerror("Ошибка", f"Не удалось запустить мониторинг: {e}")
-        else:
-            logger.warning("Мониторинг уже запущен")
-            messagebox.showwarning("Предупреждение", "Мониторинг строк уже запущен")
-
-    def stop_lines_monitoring(self):
-        """Остановка мониторинга строк."""
-        if self.lines_monitoring_running:
-            self.lines_monitoring_running = False
-            stop_force_capture()
-            stop_subprocesses()
-            if self.lines_monitoring_thread and self.lines_monitoring_thread.is_alive():
-                self.lines_monitoring_thread.join(timeout=5.0)
-            if hasattr(self, 'check_files_thread') and self.check_files_thread.is_alive():
-                self.check_files_thread.join(timeout=5.0)
-            self.lines_monitoring_thread = None
-            self.ui.update_lines_status("Остановлен")
-            logger.info("Остановлен мониторинг строк")
-        else:
-            messagebox.showwarning("Предупреждение", "Мониторинг строк уже остановлен")
 
     def start_rbk_mir24(self):
         """Запуск мониторинга RBK и MIR24 (ручной запуск)."""
@@ -418,12 +168,49 @@ class MonitoringApp:
         else:
             messagebox.showwarning("Предупреждение", "Мониторинг RBK и MIR24 уже остановлен или event loop не инициализирован")
 
+    def start_lines_monitoring(self):
+        """Запуск мониторинга строк по кнопке."""
+        if not self.lines_monitoring_running:
+            try:
+                self.lines_monitoring_running = True
+                self.last_lines_activity_time = time_module.time()
+                start_force_capture()
+                self.lines_monitoring_thread = threading.Thread(
+                    target=start_lines_monitoring,
+                    daemon=True
+                )
+                self.lines_monitoring_thread.start()
+                self.ui.update_lines_status("Запущен")
+                logger.info("Запущен мониторинг строк по кнопке")
+            except Exception as e:
+                logger.error(f"Ошибка при запуске мониторинга по кнопке: {e}")
+                self.lines_monitoring_running = False
+                messagebox.showerror("Ошибка", f"Не удалось запустить мониторинг: {e}")
+        else:
+            logger.warning("Мониторинг уже запущен")
+            messagebox.showwarning("Предупреждение", "Мониторинг строк уже запущен")
+
+    def stop_lines_monitoring(self):
+        """Остановка мониторинга строк."""
+        if self.lines_monitoring_running:
+            self.lines_monitoring_running = False
+            stop_force_capture()
+            stop_subprocesses()
+            if self.lines_monitoring_thread and self.lines_monitoring_thread.is_alive():
+                self.lines_monitoring_thread.join(timeout=5.0)
+            if hasattr(self, 'check_files_thread') and self.check_files_thread.is_alive():
+                self.check_files_thread.join(timeout=5.0)
+            self.lines_monitoring_thread = None
+            self.ui.update_lines_status("Остановлен")
+            logger.info("Остановлен мониторинг строк")
+        else:
+            messagebox.showwarning("Предупреждение", "Мониторинг строк уже остановлен")
+
     def save_and_send_lines(self):
         """Запускает полный цикл проверки скриншотов, фильтрации и отправки в Telegram."""
         try:
             self.ui.update_status("Начало обработки скриншотов...")
             self.ui.update_processing_status("Выполняется...")
-            
             thread = threading.Thread(
                 target=self._save_and_send_lines_task,
                 daemon=True
@@ -819,11 +606,6 @@ class MonitoringApp:
         try:
             logger.info("Начало очистки ресурсов...")
             
-            # Останавливаем планировщик
-            if self.scheduler_running:
-                self.scheduler_running = False
-                logger.info("Планировщик остановлен")
-            
             # Останавливаем мониторинг строк
             if self.lines_monitoring_running:
                 stop_force_capture()
@@ -839,8 +621,8 @@ class MonitoringApp:
             # Останавливаем распознавание видео
             if self.video_recognition_running:
                 self.video_recognition_running = False
-                if self.video_recognition_thread and self.video_recognition_thread.is_alive():
-                    self.video_recognition_thread.join(timeout=5)
+                if self.video_processing_thread and self.video_processing_thread.is_alive():
+                    self.video_processing_thread.join(timeout=5)
                 logger.info("Распознавание видео остановлено")
             
             # Останавливаем event loop
@@ -863,8 +645,62 @@ class MonitoringApp:
         except Exception as e:
             logger.error(f"Ошибка при очистке ресурсов: {e}")
 
+    def start_scheduler(self):
+        """Запуск планировщика задач."""
+        if not self.scheduler_running:
+            self.scheduler_running = True
+            self.scheduler_thread = threading.Thread(
+                target=self._run_scheduler,
+                daemon=True
+            )
+            self.scheduler_thread.start()
+            logger.info("Планировщик задач запущен")
+
+    def _run_scheduler(self):
+        logger.info("Настройка расписания задач...")
+        self.ui.update_scheduler_status("Настройка расписания...")
+        with open("channels.json", "r", encoding="utf-8") as f:
+            channels = json.load(f)
+        channel_methods = {
+            "R1": self._start_r1_monitoring,
+            "Zvezda": self._start_zvezda_monitoring,
+            "TVC": self._start_other_channels_monitoring,
+            "RenTV": self._start_other_channels_monitoring,
+            "NTV": self._start_other_channels_monitoring,
+        }
+        for channel, info in channels.items():
+            lines_times = set(info.get("lines", []))
+            schedule_times = set(info.get("schedule", []))
+            if not lines_times:
+                continue
+            method = channel_methods.get(channel)
+            if method:
+                for t in lines_times:
+                    if t in schedule_times:
+                        logger.info(f"Пропуск расписания 'lines' для {channel} в {t}, так как оно совпадает с 'schedule'. Запись сюжета будет выполнена.")
+                        continue
+                    schedule.every().day.at(t).do(method)
+                    logger.info(f"Добавлено расписание для {channel} ('lines'): {t}")
+        schedule.every().day.at("22:00").do(self._send_daily_file_to_telegram)
+        logger.info("Добавлено расписание отправки ежедневного файла в Telegram: 22:00")
+        schedule.every().day.at("23:00").do(self._send_daily_sent_texts_to_telegram)
+        logger.info("Добавлено расписание отправки sent_texts_YYYYMMDD.txt в Telegram: 23:00")
+        logger.info("Расписание настроено, начинаем выполнение...")
+        self.ui.update_scheduler_status("Активен")
+        while self.scheduler_running:
+            try:
+                if not self.scheduler_paused:
+                    schedule.run_pending()
+                    if self._has_new_videos_in_lines_video():
+                        self.check_and_send_videos()
+                        self._cleanup_video_files()
+                self._check_and_start_idle_monitoring()
+                time_module.sleep(1)
+            except Exception as e:
+                logger.error(f"Ошибка в планировщике: {e}")
+                self.ui.update_scheduler_status(f"Ошибка: {str(e)}")
+
     def pause_scheduler(self):
-        """Приостановка выполнения задач по расписанию."""
         if not self.scheduler_paused:
             self.scheduler_paused = True
             logger.info("Планировщик приостановлен.")
@@ -872,22 +708,22 @@ class MonitoringApp:
             self.ui.toggle_scheduler_buttons(paused=True)
 
     def resume_scheduler(self):
-        """Возобновление выполнения задач по расписанию."""
         if self.scheduler_paused:
             self.scheduler_paused = False
             logger.info("Планировщик возобновлен.")
             self.ui.update_scheduler_status("Активен")
             self.ui.toggle_scheduler_buttons(paused=False)
 
-    def _check_and_start_idle_monitoring(self):
-        """Проверяет время неактивности и запускает мониторинг, если нужно."""
-        if self.lines_monitoring_running or self.scheduler_paused:
-            return
-
-        idle_timeout = 15 * 60  # 15 минут
-        if time_module.time() - self.last_lines_activity_time > idle_timeout:
-            logger.info(f"Не было активности мониторинга строк более {idle_timeout / 60:.0f} минут. Запускаю стандартный сеанс мониторинга.")
-            self._start_other_channels_monitoring()
+    def _has_new_videos_in_lines_video(self):
+        video_dir = Path("lines_video")
+        if not video_dir.exists():
+            return False
+        for channel_dir in video_dir.iterdir():
+            if not channel_dir.is_dir():
+                continue
+            if any(channel_dir.glob("*.mp4")):
+                return True
+        return False
 
     def start_video_processing(self):
         """Запускает скрипт обработки видеосюжетов в отдельном потоке."""
