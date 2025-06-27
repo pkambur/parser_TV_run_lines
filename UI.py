@@ -88,6 +88,8 @@ class MonitoringUI:
         self.lines_status.pack(fill="x", pady=5)
         self.lines_scheduler_status = ttk.Label(lines_frame, text="Планировщик: Ожидание")
         self.lines_scheduler_status.pack(fill="x", pady=5)
+        self.processing_status = ttk.Label(lines_frame, text="Статус обработки: Ожидание")  # Добавляем метку для статуса обработки
+        self.processing_status.pack(fill="x", pady=5)
         # Кнопки в одну колонну
         self.start_lines_button = ttk.Button(lines_frame, text="Запустить мониторинг", command=self.app.start_lines_monitoring)
         self.start_lines_button.pack(fill="x", pady=2)
@@ -391,13 +393,12 @@ class MonitoringUI:
         self.rbk_mir24_scheduler_status.config(text=f"Планировщик: {status}")
             
     def update_processing_status(self, status):
-        self.processing_status.config(text=f"Статус обработки: {status}")
+        if hasattr(self, 'processing_status') and self.processing_status is not None:
+            self.processing_status.config(text=f"Статус обработки: {status}")
         if "Выполняется" in status or "Отправка" in status or "Обработка" in status:
-            if hasattr(self, "save_and_send_lines_button"):
-                self.save_and_send_lines_button.config(state="disabled")
+            self.save_and_send_lines_button.config(state="disabled")
         else:
-            if hasattr(self, "save_and_send_lines_button"):
-                self.save_and_send_lines_button.config(state="normal")
+            self.save_and_send_lines_button.config(state="normal")
             
     def update_video_check_status(self, status):
         self.video_check_status.config(text=f"Статус: {status}")

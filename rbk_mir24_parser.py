@@ -327,6 +327,18 @@ async def process_rbk_mir24(app, ui, send_files=False, channels=None, force_crop
                 elif hasattr(task, 'exception') and task.exception():
                     logger.error(f"Задача записи завершилась с ошибкой: {task.exception()}")
 
+        # После завершения записи crop-видео — запускаем распознавание и отправку видео
+        if hasattr(app, "check_and_send_videos"):
+            def run_check_and_send():
+                try:
+                    app.check_and_send_videos()
+                except Exception as e:
+                    logger.error(f"Ошибка при запуске распознавания и отправки видео: {e}")
+            if hasattr(app, "ui") and hasattr(app.ui, "root"):
+                app.ui.root.after(0, run_check_and_send)
+            else:
+                run_check_and_send()
+
         if ui.root.winfo_exists():
             ui.update_status("Запись завершена")
             ui.update_rbk_mir24_status("Остановлен")

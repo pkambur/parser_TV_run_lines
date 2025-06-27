@@ -23,7 +23,7 @@ from difflib import SequenceMatcher
 import requests
 
 from UI import MonitoringUI
-from rbk_mir24_parser import process_rbk_mir24, stop_rbk_mir24
+from rbk_mir24_parser import process_rbk_mir24, stop_rbk_mir24, VIDEO_DURATION
 from utils import setup_logging
 from parser_lines import main as start_lines_monitoring, stop_subprocesses, start_force_capture, stop_force_capture
 from lines_to_csv import process_screenshots, get_daily_file_path
@@ -221,6 +221,18 @@ class MonitoringApp:
             self.ui.update_status("Ошибка обработки")
             messagebox.showerror("Ошибка", f"Не удалось запустить обработку скриншотов: {e}")
 
+    def fuzzy_keyword_match(self, text, keywords, threshold=0.8):
+        """Проверяет, есть ли в тексте слова, похожие на ключевые (fuzzy matching)."""
+        text = text.lower()
+        for kw in keywords:
+            if kw in text:
+                return True
+            # Проверяем каждое слово в тексте
+            for word in text.split():
+                if SequenceMatcher(None, kw, word).ratio() >= threshold:
+                    return True
+        return False
+
     def _save_and_send_lines_task(self):
         """Задача для проверки, фильтрации и отправки скриншотов."""
         summary_title = "Результат обработки скриншотов"
@@ -244,7 +256,6 @@ class MonitoringApp:
             logger.info(f"Найдено {len(all_files)} скриншотов для обработки.")
             
             keywords = self._load_keywords()
-            # Для хранения текстов уже отправленных скриншотов за сегодня
             today_str = datetime.now().strftime('%Y%m%d')
             sent_texts_file = f'sent_texts_{today_str}.txt'
             sent_texts = []
@@ -255,9 +266,11 @@ class MonitoringApp:
             for file_path in all_files:
                 recognized_text = self._extract_text_from_image(file_path)
                 text_lower = recognized_text.lower()
-                has_keyword = any(kw in text_lower for kw in keywords)
+                has_keyword = False
+                # --- Fuzzy matching вместо Hugging Face ---
+                if self.fuzzy_keyword_match(text_lower, keywords):
+                    has_keyword = True
                 is_duplicate = False
-                # Проверка на дубликаты по схожести текста (сначала по сегодняшнему файлу, потом по сессии)
                 for prev_text in sent_texts + session_texts:
                     similarity = SequenceMatcher(None, text_lower, prev_text).ratio()
                     if similarity > 0.8:
@@ -658,7 +671,29 @@ class MonitoringApp:
 
     def _run_scheduler(self):
         logger.info("Настройка расписания задач...")
-        self.ui.update_scheduler_status("Настройка расписания...")
+        self._setup_schedule()
+        logger.info("Расписание настроено, начинаем выполнение...")
+        self.ui.update_scheduler_status("Активен")
+        while self.scheduler_running:
+            try:
+                if not self.scheduler_paused:
+                    try:
+                        schedule.run_pending()
+                    except Exception as sched_exc:
+                        logger.error(f"Ошибка в schedule.run_pending: {sched_exc}")
+                    # Проверка на необходимость перезагрузки расписания
+                    if getattr(self, 'scheduler_reload_requested', False):
+                        logger.info("Перезагрузка расписания по запросу...")
+                        self.reload_scheduler()
+                        self.scheduler_reload_requested = False
+                self._check_and_start_idle_monitoring()
+                time_module.sleep(1)
+            except Exception as e:
+                logger.error(f"Ошибка в планировщике: {e}")
+                self.ui.update_scheduler_status(f"Ошибка: {str(e)}")
+
+    def _setup_schedule(self):
+        schedule.clear()
         with open("channels.json", "r", encoding="utf-8") as f:
             channels = json.load(f)
         channel_methods = {
@@ -670,35 +705,35 @@ class MonitoringApp:
         }
         for channel, info in channels.items():
             lines_times = set(info.get("lines", []))
-            schedule_times = set(info.get("schedule", []))
             if not lines_times:
                 continue
-            method = channel_methods.get(channel)
-            if method:
+            # Для RBK и MIR24 — запускать crop-видео и мониторинг строк по расписанию
+            if channel in ("RBK", "MIR24"):
                 for t in lines_times:
-                    if t in schedule_times:
-                        logger.info(f"Пропуск расписания 'lines' для {channel} в {t}, так как оно совпадает с 'schedule'. Запись сюжета будет выполнена.")
-                        continue
-                    schedule.every().day.at(t).do(method)
-                    logger.info(f"Добавлено расписание для {channel} ('lines'): {t}")
+                    schedule.every().day.at(t).do(self._start_rbk_mir24_crop_recording)
+                    logger.info(f"Добавлено расписание записи crop-видео для {channel}: {t}")
+                    schedule.every().day.at(t).do(self._start_rbk_mir24_lines_monitoring)
+                    logger.info(f"Добавлено расписание мониторинга строк для {channel}: {t}")
+            else:
+                method = channel_methods.get(channel)
+                if method:
+                    for t in lines_times:
+                        schedule.every().day.at(t).do(method)
+                        logger.info(f"Добавлено расписание для {channel} ('lines'): {t}")
         schedule.every().day.at("22:00").do(self._send_daily_file_to_telegram)
         logger.info("Добавлено расписание отправки ежедневного файла в Telegram: 22:00")
         schedule.every().day.at("23:00").do(self._send_daily_sent_texts_to_telegram)
         logger.info("Добавлено расписание отправки sent_texts_YYYYMMDD.txt в Telegram: 23:00")
-        logger.info("Расписание настроено, начинаем выполнение...")
-        self.ui.update_scheduler_status("Активен")
-        while self.scheduler_running:
-            try:
-                if not self.scheduler_paused:
-                    schedule.run_pending()
-                    if self._has_new_videos_in_lines_video():
-                        self.check_and_send_videos()
-                        self._cleanup_video_files()
-                self._check_and_start_idle_monitoring()
-                time_module.sleep(1)
-            except Exception as e:
-                logger.error(f"Ошибка в планировщике: {e}")
-                self.ui.update_scheduler_status(f"Ошибка: {str(e)}")
+
+    def reload_scheduler(self):
+        logger.info("Выполняется перезагрузка расписания...")
+        self._setup_schedule()
+        logger.info("Расписание успешно перезагружено.")
+        self.ui.update_scheduler_status("Перезагружено")
+
+    def request_scheduler_reload(self):
+        """Установить флаг для перезагрузки расписания (можно вызывать из UI или внешнего события)."""
+        self.scheduler_reload_requested = True
 
     def pause_scheduler(self):
         if not self.scheduler_paused:
@@ -857,6 +892,131 @@ class MonitoringApp:
                     video_file.unlink()
                 except Exception:
                     pass
+
+    def _start_r1_monitoring(self):
+        """Запуск мониторинга строк для канала R1 по расписанию."""
+        try:
+            self.ui.update_status("Запуск мониторинга строк для R1 по расписанию...")
+            self.lines_monitoring_running = True
+            start_force_capture()
+            thread = threading.Thread(target=start_lines_monitoring, daemon=True)
+            thread.start()
+            self.lines_monitoring_thread = thread
+            self.ui.update_lines_status("Запущен (R1)")
+            logger.info("Запущен мониторинг строк для R1 по расписанию")
+        except Exception as e:
+            logger.error(f"Ошибка при запуске мониторинга строк для R1: {e}")
+            self.ui.update_status(f"Ошибка запуска мониторинга R1: {e}")
+            messagebox.showerror("Ошибка", f"Не удалось запустить мониторинг R1: {e}")
+
+    def _start_zvezda_monitoring(self):
+        """Запуск мониторинга строк для канала Zvezda по расписанию."""
+        try:
+            self.ui.update_status("Запуск мониторинга строк для Zvezda по расписанию...")
+            self.lines_monitoring_running = True
+            start_force_capture()
+            thread = threading.Thread(target=start_lines_monitoring, daemon=True)
+            thread.start()
+            self.lines_monitoring_thread = thread
+            self.ui.update_lines_status("Запущен (Zvezda)")
+            logger.info("Запущен мониторинг строк для Zvezda по расписанию")
+        except Exception as e:
+            logger.error(f"Ошибка при запуске мониторинга строк для Zvezda: {e}")
+            self.ui.update_status(f"Ошибка запуска мониторинга Zvezda: {e}")
+            messagebox.showerror("Ошибка", f"Не удалось запустить мониторинг Zvezda: {e}")
+
+    def _start_other_channels_monitoring(self):
+        """Запуск мониторинга строк для других каналов по расписанию (TVC, RenTV, NTV)."""
+        try:
+            self.ui.update_status("Запуск мониторинга строк для канала по расписанию...")
+            self.lines_monitoring_running = True
+            start_force_capture()
+            thread = threading.Thread(target=start_lines_monitoring, daemon=True)
+            thread.start()
+            self.lines_monitoring_thread = thread
+            self.ui.update_lines_status("Запущен (другой канал)")
+            logger.info("Запущен мониторинг строк для другого канала по расписанию")
+        except Exception as e:
+            logger.error(f"Ошибка при запуске мониторинга строк для другого канала: {e}")
+            self.ui.update_status(f"Ошибка запуска мониторинга: {e}")
+            messagebox.showerror("Ошибка", f"Не удалось запустить мониторинг: {e}")
+
+    def _check_and_start_idle_monitoring(self):
+        """Заглушка для проверки и запуска idle-мониторинга (для планировщика)."""
+        logger.debug("Вызван _check_and_start_idle_monitoring (заглушка)")
+        pass
+
+    def _start_rbk_mir24_crop_recording(self):
+        """Запуск записи crop-видео для RBK и MIR24 по расписанию."""
+        def run_and_process():
+            try:
+                video_channels = ['RBK', 'MIR24']
+                future = asyncio.run_coroutine_threadsafe(
+                    process_rbk_mir24(self, self.ui, True, channels=video_channels, force_crop=True),
+                    self.loop
+                )
+                self.ui.update_rbk_mir24_status("Запущен (по расписанию)")
+                logger.info("Запущена запись crop-видео для RBK и MIR24 по расписанию")
+                # Дождаться завершения записи
+                future.result()
+                logger.info("Запись crop-видео для RBK и MIR24 завершена, запускается распознавание и отправка видео...")
+                # Запускать обработку и отправку видео потокобезопасно для UI
+                if hasattr(self, "ui") and hasattr(self.ui, "root"):
+                    self.ui.root.after(0, self.check_and_send_videos)
+                else:
+                    self.check_and_send_videos()
+            except Exception as e:
+                logger.error(f"Ошибка при запуске записи crop-видео по расписанию: {e}")
+                self.ui.update_rbk_mir24_status("Ошибка")
+        threading.Thread(target=run_and_process, daemon=True).start()
+
+    def _start_rbk_mir24_lines_monitoring(self):
+        """Запуск мониторинга строк (скриншотов) для RBK и MIR24 по расписанию и автоматическая обработка после завершения."""
+        def run_and_process():
+            try:
+                self.ui.update_status("Запуск мониторинга строк для RBK и MIR24 по расписанию...")
+                self.lines_monitoring_running = True
+                start_force_capture()
+                thread = threading.Thread(target=start_lines_monitoring, daemon=True)
+                thread.start()
+                self.lines_monitoring_thread = thread
+                self.ui.update_lines_status("Запущен (RBK+MIR24)")
+                logger.info("Запущен мониторинг строк для RBK и MIR24 по расписанию")
+                timer = threading.Timer(VIDEO_DURATION, self.stop_lines_monitoring)
+                timer.start()
+                thread.join()
+                timer.cancel()
+                logger.info("Мониторинг строк для RBK и MIR24 завершён, запускается обработка скриншотов...")
+                self.save_and_send_lines()
+            except Exception as e:
+                logger.error(f"Ошибка при запуске мониторинга строк для RBK и MIR24: {e}")
+                self.ui.update_status(f"Ошибка запуска мониторинга RBK и MIR24: {e}")
+                messagebox.showerror("Ошибка", f"Не удалось запустить мониторинг RBK и MIR24: {e}")
+        threading.Thread(target=run_and_process, daemon=True).start()
+
+    def _start_channel_lines_monitoring(self, channel):
+        """Запуск мониторинга строк (скриншотов) для указанного канала по расписанию и автоматическая обработка после завершения."""
+        def run_and_process():
+            try:
+                self.ui.update_status(f"Запуск мониторинга строк для {channel} по расписанию...")
+                self.lines_monitoring_running = True
+                start_force_capture()
+                thread = threading.Thread(target=start_lines_monitoring, daemon=True)
+                thread.start()
+                self.lines_monitoring_thread = thread
+                self.ui.update_lines_status(f"Запущен ({channel})")
+                logger.info(f"Запущен мониторинг строк для {channel} по расписанию")
+                timer = threading.Timer(VIDEO_DURATION, self.stop_lines_monitoring)
+                timer.start()
+                thread.join()
+                timer.cancel()
+                logger.info(f"Мониторинг строк для {channel} завершён, запускается обработка скриншотов...")
+                self.save_and_send_lines()
+            except Exception as e:
+                logger.error(f"Ошибка при запуске мониторинга строк для {channel}: {e}")
+                self.ui.update_status(f"Ошибка запуска мониторинга {channel}: {e}")
+                messagebox.showerror("Ошибка", f"Не удалось запустить мониторинг {channel}: {e}")
+        threading.Thread(target=run_and_process, daemon=True).start()
 
 class StatusHandler(BaseHTTPRequestHandler):
     def __init__(self, ui_instance, *args, **kwargs):
