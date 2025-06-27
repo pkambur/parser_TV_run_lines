@@ -21,6 +21,7 @@ import re
 import pytesseract
 from difflib import SequenceMatcher
 import requests
+from glob import glob
 
 from UI import MonitoringUI
 from rbk_mir24_parser import process_rbk_mir24, stop_rbk_mir24, VIDEO_DURATION
@@ -76,6 +77,7 @@ class MonitoringApp:
         self.ui = MonitoringUI(self)
         self.start_status_server()
         self.start_scheduler()
+        self._cleanup_old_sent_texts()
 
     def start_status_server(self):
         """Запускает HTTP-сервер для получения статусов от дочерних процессов."""
@@ -248,22 +250,21 @@ class MonitoringApp:
                 return
 
             self.ui.root.after(0, self.ui.update_processing_status, "Обработка: распознавание текста...")
-            
+            self.ui.root.after(0, self.ui.show_progress)
             files_with_keywords = []
             file_captions = {}
-            
             all_files = list(screenshots_dir.rglob("*.[jp][pn]g")) 
             logger.info(f"Найдено {len(all_files)} скриншотов для обработки.")
-            
             keywords = self._load_keywords()
             today_str = datetime.now().strftime('%Y%m%d')
-            sent_texts_file = f'sent_texts_{today_str}.txt'
+            sent_texts_file = Path(f'sent_texts_{today_str}.txt')
             sent_texts = []
-            if os.path.exists(sent_texts_file):
-                with open(sent_texts_file, 'r', encoding='utf-8') as f:
+            if sent_texts_file.exists():
+                with sent_texts_file.open('r', encoding='utf-8') as f:
                     sent_texts = [line.strip() for line in f if line.strip()]
             session_texts = []  # Для хранения текстов в рамках одной обработки
-            for file_path in all_files:
+            total_files = len(all_files)
+            for i, file_path in enumerate(all_files):
                 recognized_text = self._extract_text_from_image(file_path)
                 text_lower = recognized_text.lower()
                 has_keyword = False
@@ -308,21 +309,22 @@ class MonitoringApp:
                         logger.info(f"Файл {file_path.name} удален (нет ключевых слов или дубликат).")
                     except Exception as e:
                         logger.error(f"Не удалось удалить файл {file_path.name}: {e}")
+                # --- Обновление прогресса ---
+                percent = ((i + 1) / total_files) * 100 if total_files else 100
+                self.ui.root.after(0, self.ui.update_progress, percent)
             # После отправки файлов — добавляем тексты в файл за день
             if files_with_keywords:
-                with open(sent_texts_file, 'a', encoding='utf-8') as f:
+                with sent_texts_file.open('a', encoding='utf-8') as f:
                     for file_path in files_with_keywords:
                         text = self._extract_text_from_image(file_path).lower()
                         f.write(text + '\n')
-            
+            self.ui.root.after(0, self.ui.hide_progress)
             if not files_with_keywords:
                 self.ui.root.after(0, messagebox.showinfo, summary_title, "Обработка завершена. Файлов с ключевыми словами не найдено.")
                 self.ui.root.after(0, self.ui.update_processing_status, "Ожидание")
                 return
-
             self.ui.root.after(0, self.ui.update_processing_status, f"Отправка {len(files_with_keywords)} файлов в Telegram...")
             sent_count = 0
-            
             for file_path in files_with_keywords:
                 caption = file_captions.get(str(file_path), f"{file_path.name}")
                 if send_files([str(file_path)], caption=caption):
@@ -334,17 +336,16 @@ class MonitoringApp:
                         logger.error(f"Не удалось удалить файл {file_path.name} после отправки: {e}")
                 else:
                     logger.warning(f"Не удалось отправить файл {file_path.name}")
-            
             summary_message = f"Обработка завершена.\n\nНайдено файлов с ключевыми словами: {len(files_with_keywords)}\nУспешно отправлено: {sent_count}"
             if sent_count < len(files_with_keywords):
                 summary_message += "\n\nНекоторые файлы не удалось отправить. Подробности в логах."
             self.ui.root.after(0, messagebox.showinfo, summary_title, summary_message)
-
         except Exception as e:
             logger.error(f"Ошибка в задаче обработки скриншотов: {e}")
             self.ui.root.after(0, messagebox.showerror, "Ошибка", f"В процессе обработки скриншотов произошла ошибка:\n{e}")
         finally:
             self.ui.root.after(0, self.ui.update_processing_status, "Ожидание")
+            self.ui.root.after(0, self.ui.hide_progress)
 
     def _process_and_send_screenshots(self):
         """Обработка и отправка скриншотов."""
@@ -386,17 +387,19 @@ class MonitoringApp:
         """Отправка файла с текстами отправленных скриншотов за день в Telegram."""
         try:
             today_str = datetime.now().strftime('%Y%m%d')
-            sent_texts_file = f'sent_texts_{today_str}.txt'
-            if os.path.exists(sent_texts_file):
+            sent_texts_file = Path(f'sent_texts_{today_str}.txt')
+            if sent_texts_file.exists():
                 logger.info(f"Отправка файла с текстами скриншотов за день в Telegram: {sent_texts_file}")
                 self.ui.update_status("Отправка файла с текстами скриншотов за день в Telegram...")
                 from telegram_sender import send_report_files
-                send_report_files(sent_texts_file, [])
+                send_report_files(str(sent_texts_file), [])
                 self.ui.update_status("Файл с текстами скриншотов за день отправлен в Telegram")
                 logger.info("Файл с текстами скриншотов за день успешно отправлен в Telegram")
             else:
                 logger.warning("Файл с текстами скриншотов за день не найден для отправки")
                 self.ui.update_status("Файл с текстами скриншотов за день не найден")
+            # После отправки — очистить устаревшие файлы
+            self._cleanup_old_sent_texts()
         except Exception as e:
             logger.error(f"Ошибка при отправке файла с текстами скриншотов за день в Telegram: {e}")
             self.ui.update_status(f"Ошибка отправки файла с текстами скриншотов за день: {str(e)}")
@@ -405,31 +408,28 @@ class MonitoringApp:
         """Проверка и отправка новых файлов."""
         try:
             # Проверяем новые скриншоты
-            screenshots_dir = "screenshots"
-            if os.path.exists(screenshots_dir):
+            screenshots_dir = Path("screenshots")
+            if screenshots_dir.exists():
                 new_files = []
-                for filename in os.listdir(screenshots_dir):
-                    if filename.endswith('.jpg') and not filename.startswith('processed_'):
-                        file_path = os.path.join(screenshots_dir, filename)
+                for filename in screenshots_dir.iterdir():
+                    if filename.suffix == '.jpg' and not filename.name.startswith('processed_'):
+                        file_path = filename
                         # Проверяем, что файл не старше 5 минут
-                        if time_module.time() - os.path.getmtime(file_path) < 300:
+                        if time_module.time() - file_path.stat().st_mtime < 300:
                             new_files.append(file_path)
-                
                 if new_files:
                     logger.info(f"Найдено {len(new_files)} новых файлов для отправки")
                     self.ui.update_status(f"Отправка {len(new_files)} файлов...")
-                    
                     # Отправляем файлы в Telegram
                     for file_path in new_files:
                         try:
-                            send_files([file_path])
+                            send_files([str(file_path)])
                             # Переименовываем файл как обработанный
-                            processed_path = os.path.join(screenshots_dir, f"processed_{os.path.basename(file_path)}")
-                            os.rename(file_path, processed_path)
+                            processed_path = file_path.parent / f"processed_{file_path.name}"
+                            file_path.rename(processed_path)
                             logger.info(f"Файл {file_path} отправлен и помечен как обработанный")
                         except Exception as e:
                             logger.error(f"Ошибка при отправке файла {file_path}: {e}")
-                    
                     self.ui.update_status(f"Отправлено {len(new_files)} файлов")
         except Exception as e:
             logger.error(f"Ошибка при проверке новых файлов: {e}")
@@ -1017,6 +1017,17 @@ class MonitoringApp:
                 self.ui.update_status(f"Ошибка запуска мониторинга {channel}: {e}")
                 messagebox.showerror("Ошибка", f"Не удалось запустить мониторинг {channel}: {e}")
         threading.Thread(target=run_and_process, daemon=True).start()
+
+    def _cleanup_old_sent_texts(self):
+        """Удаляет устаревшие файлы sent_texts_YYYYMMDD.txt, кроме текущего дня."""
+        today_str = datetime.now().strftime('%Y%m%d')
+        for file_path in Path('.').glob('sent_texts_*.txt'):
+            if today_str not in file_path.name:
+                try:
+                    file_path.unlink()
+                    logger.info(f"Удалён устаревший файл: {file_path}")
+                except Exception as e:
+                    logger.error(f"Ошибка при удалении {file_path}: {e}")
 
 class StatusHandler(BaseHTTPRequestHandler):
     def __init__(self, ui_instance, *args, **kwargs):

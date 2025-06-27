@@ -8,14 +8,17 @@ import json
 import os
 import numpy as np
 from utils import setup_logging
+import shutil
+import datetime
+from pathlib import Path
 
 logger = setup_logging('ui_log.txt')
 
 # Загрузка каналов из channels.json
-CHANNELS_FILE = 'channels.json'
+CHANNELS_FILE = Path('channels.json')
 def load_channels():
     try:
-        with open(CHANNELS_FILE, 'r', encoding='utf-8') as f:
+        with CHANNELS_FILE.open('r', encoding='utf-8') as f:
             return json.load(f)
     except Exception as e:
         logger.error(f"Ошибка при загрузке каналов: {e}")
@@ -88,8 +91,14 @@ class MonitoringUI:
         self.lines_status.pack(fill="x", pady=5)
         self.lines_scheduler_status = ttk.Label(lines_frame, text="Планировщик: Ожидание")
         self.lines_scheduler_status.pack(fill="x", pady=5)
-        self.processing_status = ttk.Label(lines_frame, text="Статус обработки: Ожидание")  # Добавляем метку для статуса обработки
+        self.processing_status = ttk.Label(lines_frame, text="Статус обработки: Ожидание")
         self.processing_status.pack(fill="x", pady=5)
+        # Прогресс-бар
+        self.progress_var = tk.DoubleVar()
+        self.progress_bar = ttk.Progressbar(lines_frame, variable=self.progress_var, maximum=100)
+        self.progress_bar.pack(fill='x', padx=5, pady=5)
+        self.progress_bar['value'] = 0
+        self.progress_bar.pack_forget()  # Скрыть по умолчанию
         # Кнопки в одну колонну
         self.start_lines_button = ttk.Button(lines_frame, text="Запустить мониторинг", command=self.app.start_lines_monitoring)
         self.start_lines_button.pack(fill="x", pady=2)
@@ -449,7 +458,7 @@ class MonitoringUI:
 
         # Загрузка каналов
         try:
-            with open('channels.json', 'r', encoding='utf-8') as f:
+            with CHANNELS_FILE.open('r', encoding='utf-8') as f:
                 channels = json.load(f)
         except Exception:
             channels = {}
@@ -567,17 +576,36 @@ class MonitoringUI:
                 channel_data['special_durations'] = specials
             
             channels[ch_name] = channel_data
+            # Перед сохранением делаем резервную копию channels.json
+            backup_path = None
             try:
-                with open('channels.json', 'w', encoding='utf-8') as f:
-                    json.dump(channels, f, ensure_ascii=False, indent=4)
-                tk.messagebox.showinfo("Успех", f"Канал '{ch_name}' сохранён.")
+                if CHANNELS_FILE.exists():
+                    backup_path = CHANNELS_FILE.with_suffix('.json.bak')
+                    shutil.copy2(str(CHANNELS_FILE), str(backup_path))
+            except Exception as e:
+                logger.error(f"Ошибка при создании резервной копии channels.json: {e}")
+            try:
+                with CHANNELS_FILE.open('w', encoding='utf-8') as f:
+                    json.dump(channels, f, ensure_ascii=False, indent=2)
+                logger.info("Каналы успешно сохранены в channels.json")
                 settings_win.destroy()
                 self.channels = channels
                 self.channel_names = list(channels.keys())
                 for combo in self.comboboxes:
                     combo['values'] = self.channel_names
             except Exception as e:
-                tk.messagebox.showerror("Ошибка", f"Не удалось сохранить: {e}")
+                logger.error(f"Ошибка при сохранении channels.json: {e}")
+                # Восстановление из резервной копии
+                if backup_path and backup_path.exists():
+                    try:
+                        shutil.copy2(str(backup_path), str(CHANNELS_FILE))
+                        logger.info("channels.json восстановлен из резервной копии")
+                        messagebox.showerror("Ошибка", f"Ошибка при сохранении channels.json. Файл восстановлен из резервной копии.\n{e}")
+                    except Exception as restore_e:
+                        logger.error(f"Ошибка при восстановлении channels.json: {restore_e}")
+                        messagebox.showerror("Критическая ошибка", f"Ошибка при сохранении и восстановлении channels.json!\n{e}\n{restore_e}")
+                else:
+                    messagebox.showerror("Ошибка", f"Ошибка при сохранении channels.json и отсутствует резервная копия!\n{e}")
 
         save_btn = tk.Button(settings_win, text="Сохранить", command=save_channel)
         save_btn.pack(pady=15)
@@ -623,3 +651,15 @@ class MonitoringUI:
         else:
             self.pause_scheduler_button.config(state="normal")
             self.resume_scheduler_button.config(state="disabled")
+
+    def show_progress(self):
+        self.progress_bar.pack(fill='x', padx=5, pady=5)
+        self.progress_var.set(0)
+        self.progress_bar.update()
+
+    def hide_progress(self):
+        self.progress_bar.pack_forget()
+
+    def update_progress(self, percent):
+        self.progress_var.set(percent)
+        self.progress_bar.update()

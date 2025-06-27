@@ -189,44 +189,40 @@ def save_to_daily_file(channel: str, text: str, image_path: str, daily_file_path
 def process_screenshots(screenshots_dir: str, processed_dir: str, daily_file_path: str):
     keywords = load_keywords()
     duplicate_checker = TextDuplicateChecker()
-
-    for channel_dir in os.listdir(screenshots_dir):
-        channel_path = os.path.join(screenshots_dir, channel_dir)
-        if not os.path.isdir(channel_path):
+    screenshots_dir = Path(screenshots_dir)
+    processed_dir = Path(processed_dir)
+    daily_file_path = Path(daily_file_path)
+    for channel_dir in screenshots_dir.iterdir():
+        if not channel_dir.is_dir():
             continue
-
         # Пропускаем определенные каналы
-        if channel_dir in ['RBK', 'MIR24', 'TVC', 'NTV', 'RenTV']:
+        if channel_dir.name in ['RBK', 'MIR24', 'TVC', 'NTV', 'RenTV']:
             continue
-
-        processed_channel_dir = os.path.join(processed_dir, channel_dir)
-        os.makedirs(processed_channel_dir, exist_ok=True)
-
-        for image_file in os.listdir(channel_path):
-            image_path = os.path.join(channel_path, image_file)
-            if not image_file.endswith(('.png', '.jpg', '.jpeg')):
+        processed_channel_dir = processed_dir / channel_dir.name
+        processed_channel_dir.mkdir(exist_ok=True)
+        for image_file in channel_dir.iterdir():
+            if not image_file.suffix.lower() in ['.png', '.jpg', '.jpeg']:
                 continue
-
-            text, valid_image_path = process_file(image_path, keywords, duplicate_checker, daily_file_path)
+            text, valid_image_path = process_file(str(image_file), keywords, duplicate_checker, str(daily_file_path))
             if text and valid_image_path:
-                new_path = os.path.join(processed_channel_dir, image_file)
-                os.rename(image_path, new_path)
-                save_to_daily_file(channel_dir, text, new_path, daily_file_path)
+                new_path = processed_channel_dir / image_file.name
+                image_file.rename(new_path)
+                save_to_daily_file(channel_dir.name, text, str(new_path), str(daily_file_path))
             else:
                 try:
-                    os.remove(image_path)
-                    logger.info(f"Удален файл без ключевых слов: {image_path}")
+                    image_file.unlink()
+                    logger.info(f"Удален файл без ключевых слов: {image_file}")
                 except Exception as e:
-                    logger.error(f"Ошибка удаления {image_path}: {e}")
+                    logger.error(f"Ошибка удаления {image_file}: {e}")
 
 def get_daily_file_path():
     """
     Возвращает путь к ежедневному файлу с бегущими строками и список ранее распознанных текстов за день.
     Путь формируется по текущей дате. Если файл существует, возвращает также список текстов из него.
     """
-    file_path = f"daily_lines_{datetime.now().strftime('%Y-%m-%d')}.xlsx"
+    file_path = Path(f"daily_lines_{datetime.now().strftime('%Y-%m-%d')}.xlsx")
     previous_texts = []
-    if os.path.exists(file_path):
+    if file_path.exists():
         try:
             df = pd.read_excel(file_path)
             if 'Text' in df.columns:

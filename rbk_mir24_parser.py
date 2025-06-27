@@ -8,10 +8,11 @@ from datetime import datetime
 import cv2
 import numpy as np
 from utils import setup_logging
+from pathlib import Path
 
 logger = setup_logging('rbk_mir24_parser_log.txt')
-base_dir = os.path.abspath("video")  # Абсолютный путь для надежности
-LINES_VIDEO_ROOT = os.path.abspath("lines_video")  # Для crop-роликов
+base_dir = Path("video").resolve()  # Абсолютный путь для надежности
+LINES_VIDEO_ROOT = Path("lines_video").resolve()  # Для crop-роликов
 VIDEO_DURATION = 240  # 240 секунд
 
 def get_current_time_str():
@@ -113,11 +114,11 @@ async def validate_crop_params(channel_name, channel_info, resolution):
 async def record_video(channel_name, channel_info, process_list):
     try:
         logger.info(f"Подготовка записи для {channel_name}")
-        output_dir = os.path.join(base_dir, channel_name)
-        os.makedirs(output_dir, exist_ok=True)
+        output_dir = base_dir / channel_name
+        output_dir.mkdir(parents=True, exist_ok=True)
 
         timestamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
-        output_path = os.path.join(output_dir, f"{channel_name}_video_{timestamp}.mp4")
+        output_path = output_dir / f"{channel_name}_video_{timestamp}.mp4"
 
         # Проверка доступности URL
         if not await check_url_accessible(channel_info["url"]):
@@ -239,10 +240,10 @@ async def record_video_opencv(channel_name, stream_url, output_path, crop_params
 async def record_lines_video(channel_name, channel_info, duration=VIDEO_DURATION):
     """Записывает crop-ролик в lines_video/<channel>/"""
     try:
-        output_dir = os.path.join(LINES_VIDEO_ROOT, channel_name)
-        os.makedirs(output_dir, exist_ok=True)
+        output_dir = LINES_VIDEO_ROOT / channel_name
+        output_dir.mkdir(parents=True, exist_ok=True)
         timestamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
-        output_path = os.path.join(output_dir, f"{channel_name}_lines_{timestamp}.mp4")
+        output_path = output_dir / f"{channel_name}_lines_{timestamp}.mp4"
 
         # Проверка доступности URL
         if not await check_url_accessible(channel_info["url"]):

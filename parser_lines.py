@@ -8,6 +8,7 @@ import subprocess
 from utils import setup_logging
 import cv2
 import numpy as np
+from pathlib import Path
 
 # Инициализация логирования
 logger = setup_logging('parser_lines_log.txt')
@@ -46,7 +47,9 @@ def capture_screenshot(channel_name, stream_url, output_dir, crop_params=None):
     try:
         # Формируем имя файла с текущей датой и временем
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        output_file = os.path.join(output_dir, f"{channel_name}_{timestamp}.jpg")
+        output_dir = Path(output_dir)
+        output_dir.mkdir(parents=True, exist_ok=True)
+        output_file = output_dir / f"{channel_name}_{timestamp}.jpg"
         
         # Открываем видеопоток
         cap = cv2.VideoCapture(stream_url)
@@ -80,7 +83,7 @@ def capture_screenshot(channel_name, stream_url, output_dir, crop_params=None):
             logger.info(f"Для канала {channel_name} не указан crop. Используется полный кадр.")
         
         # Сохраняем изображение
-        success = cv2.imwrite(output_file, frame, [cv2.IMWRITE_JPEG_QUALITY, 95])
+        success = cv2.imwrite(str(output_file), frame, [cv2.IMWRITE_JPEG_QUALITY, 95])
         
         # Освобождаем ресурсы
         cap.release()
@@ -107,8 +110,8 @@ def monitor_channel(channel_name, channel_info):
             return
 
         # Создаем директорию для скриншотов если её нет
-        output_dir = os.path.join('screenshots', channel_name)
-        os.makedirs(output_dir, exist_ok=True)
+        output_dir = Path('screenshots') / channel_name
+        output_dir.mkdir(parents=True, exist_ok=True)
         
         # Получаем параметры обрезки и интервал
         crop_params = channel_info.get('crop')
