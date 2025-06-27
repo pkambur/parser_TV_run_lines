@@ -52,6 +52,7 @@ video_dir = "video"
 MAX_WIDTH = 1280
 MAX_HEIGHT = 1280
 MAX_FILE_SIZE = 10 * 1024 * 1024  # 10MB
+MAX_VIDEO_SIZE = 2 * 1024 * 1024 * 1024  # 2GB
 
 def get_video_files():
     """Получение списка видеофайлов из подпапок."""
@@ -372,10 +373,18 @@ async def send_files_with_caption(file_paths, caption=""):
             if not os.path.exists(file_path):
                 logger.warning(f"File not found: {file_path}")
                 continue
-                
             try:
                 file_ext = os.path.splitext(file_path)[1].lower()
-                
+                file_size = os.path.getsize(file_path)
+                # Проверка размера файла
+                if file_ext in ['.mp4', '.avi', '.mkv', '.mov']:
+                    if file_size > MAX_VIDEO_SIZE:
+                        logger.warning(f"Видео {file_path} превышает лимит Telegram (2 ГБ) и не будет отправлено.")
+                        continue
+                else:
+                    if file_size > MAX_FILE_SIZE:
+                        logger.warning(f"Файл {file_path} превышает лимит Telegram для документов (10 МБ) и не будет отправлен.")
+                        continue
                 with open(file_path, 'rb') as f:
                     for chat_id in available_chats:
                         try:
@@ -399,9 +408,7 @@ async def send_files_with_caption(file_paths, caption=""):
                             logger.info(f"Sent file {file_path} to Telegram chat {chat_id}")
                         except Exception as e:
                             logger.error(f"Error sending file to chat {chat_id}: {e}")
-                
                 sent_files.append(file_path)
-                
             except Exception as e:
                 logger.error(f"Error sending file {file_path}: {e}")
 
