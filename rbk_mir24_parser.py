@@ -9,6 +9,7 @@ import cv2
 import numpy as np
 from utils import setup_logging
 from pathlib import Path
+from config_manager import config_manager
 
 logger = setup_logging('rbk_mir24_parser_log.txt')
 base_dir = Path("video").resolve()  # Абсолютный путь для надежности
@@ -20,18 +21,8 @@ def get_current_time_str():
     return datetime.now().strftime("%H:%M")
 
 def load_channels():
-    try:
-        logger.info("Начало загрузки channels.json")
-        if not os.path.exists("channels.json"):
-            logger.error("Файл channels.json не найден")
-            return {}
-        with open("channels.json", "r", encoding="utf-8") as f:
-            channels = json.load(f)
-            logger.info(f"Содержимое channels.json: {json.dumps(channels, indent=2)}")
-            return channels
-    except Exception as e:
-        logger.error(f"Ошибка при загрузке channels.json: {e}")
-        return {}
+    """Загрузка конфигурации каналов через config_manager."""
+    return config_manager.load_channels()
 
 async def check_url_accessible(url):
     try:

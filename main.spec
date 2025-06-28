@@ -41,7 +41,8 @@ a = Analysis(
         'csv',
         'shutil',
         'io',
-        'psutil'
+        'psutil',
+        'config_manager'
     ],
     hookspath=[],
     hooksconfig={},

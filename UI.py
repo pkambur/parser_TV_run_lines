@@ -11,33 +11,14 @@ from utils import setup_logging
 import shutil
 import datetime
 from pathlib import Path
+from config_manager import config_manager
 
 logger = setup_logging('ui_log.txt')
 
-# Загрузка каналов из channels.json
+# Загрузка каналов из channels.json через config_manager
 CHANNELS_FILE = Path('channels.json')
 def load_channels():
-    try:
-        # Проверка существования файла channels.json
-        if not CHANNELS_FILE.exists():
-            error_msg = "Файл channels.json не найден. Каналы не загружены."
-            logger.error(error_msg)
-            return {}
-        
-        with CHANNELS_FILE.open('r', encoding='utf-8') as f:
-            return json.load(f)
-    except FileNotFoundError:
-        error_msg = "Файл channels.json не найден. Каналы не загружены."
-        logger.error(error_msg)
-        return {}
-    except json.JSONDecodeError as e:
-        error_msg = f"Ошибка в формате файла channels.json: {e}. Каналы не загружены."
-        logger.error(error_msg)
-        return {}
-    except Exception as e:
-        error_msg = f"Ошибка при загрузке каналов: {e}"
-        logger.error(error_msg)
-        return {}
+    return config_manager.load_channels()
 
 class MonitoringUI:
     def __init__(self, app):
@@ -472,12 +453,22 @@ class MonitoringUI:
     def cleanup(self):
         """Очистка ресурсов при закрытии."""
         try:
-            for cap in self.captures:
-                if cap is not None:
-                    cap.release()
-            for idx, after_id in enumerate(self.after_ids):
-                if after_id is not None:
-                    self.video_labels[idx].after_cancel(after_id)
+            # Проверяем, что captures инициализирован
+            if hasattr(self, 'captures') and self.captures:
+                for cap in self.captures:
+                    if cap is not None:
+                        cap.release()
+            
+            # Проверяем, что after_ids и video_labels инициализированы
+            if hasattr(self, 'after_ids') and hasattr(self, 'video_labels') and self.after_ids and self.video_labels:
+                for idx, after_id in enumerate(self.after_ids):
+                    if after_id is not None and idx < len(self.video_labels):
+                        try:
+                            self.video_labels[idx].after_cancel(after_id)
+                        except Exception as e:
+                            logger.warning(f"Ошибка при отмене after_id {after_id}: {e}")
+            
+            # Закрываем root окно
             if hasattr(self, 'root') and self.root:
                 try:
                     self.root.quit()
@@ -613,36 +604,17 @@ class MonitoringUI:
                 channel_data['special_durations'] = specials
             
             channels[ch_name] = channel_data
-            # Перед сохранением делаем резервную копию channels.json
-            backup_path = None
-            try:
-                if CHANNELS_FILE.exists():
-                    backup_path = CHANNELS_FILE.with_suffix('.json.bak')
-                    shutil.copy2(str(CHANNELS_FILE), str(backup_path))
-            except Exception as e:
-                logger.error(f"Ошибка при создании резервной копии channels.json: {e}")
-            try:
-                with CHANNELS_FILE.open('w', encoding='utf-8') as f:
-                    json.dump(channels, f, ensure_ascii=False, indent=2)
+            
+            # Используем config_manager для сохранения
+            if config_manager.save_channels(channels):
                 logger.info("Каналы успешно сохранены в channels.json")
                 settings_win.destroy()
                 self.channels = channels
                 self.channel_names = list(channels.keys())
                 for combo in self.comboboxes:
                     combo['values'] = self.channel_names
-            except Exception as e:
-                logger.error(f"Ошибка при сохранении channels.json: {e}")
-                # Восстановление из резервной копии
-                if backup_path and backup_path.exists():
-                    try:
-                        shutil.copy2(str(backup_path), str(CHANNELS_FILE))
-                        logger.info("channels.json восстановлен из резервной копии")
-                        messagebox.showerror("Ошибка", f"Ошибка при сохранении channels.json. Файл восстановлен из резервной копии.\n{e}")
-                    except Exception as restore_e:
-                        logger.error(f"Ошибка при восстановлении channels.json: {restore_e}")
-                        messagebox.showerror("Критическая ошибка", f"Ошибка при сохранении и восстановлении channels.json!\n{e}\n{restore_e}")
-                else:
-                    messagebox.showerror("Ошибка", f"Ошибка при сохранении channels.json и отсутствует резервная копия!\n{e}")
+            else:
+                messagebox.showerror("Ошибка", "Не удалось сохранить channels.json. Проверьте права доступа к файлу.")
 
         save_btn = tk.Button(settings_win, text="Сохранить", command=save_channel)
         save_btn.pack(pady=15)

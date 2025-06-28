@@ -29,6 +29,7 @@ from utils import setup_logging
 from parser_lines import main as start_lines_monitoring, stop_subprocesses, start_force_capture, stop_force_capture
 from lines_to_csv import process_screenshots, get_daily_file_path
 from telegram_sender import send_files, send_report_files
+from config_manager import config_manager
 
 # Инициализация логирования
 logger = setup_logging()
@@ -94,9 +95,9 @@ class MonitoringApp:
     def start_rbk_mir24(self):
         """Запуск мониторинга RBK и MIR24 (ручной запуск)."""
         try:
-            from rbk_mir24_parser import get_current_time_str, load_channels, process_rbk_mir24
+            from rbk_mir24_parser import get_current_time_str, process_rbk_mir24
             now_str = get_current_time_str()
-            channels_data = load_channels()
+            channels_data = config_manager.load_channels()
             video_channels = ['RBK', 'MIR24', 'RenTV', 'NTV', 'TVC']
             channels_in_lines = []
             for name in video_channels:
@@ -761,33 +762,12 @@ class MonitoringApp:
     def _setup_schedule(self):
         schedule.clear()
         
-        # Проверка существования файла channels.json
-        if not os.path.exists("channels.json"):
-            error_msg = "Файл channels.json не найден. Планировщик не может быть настроен."
+        # Загружаем конфигурацию каналов через config_manager
+        channels = config_manager.load_channels()
+        if not channels:
+            error_msg = "Не удалось загрузить конфигурацию каналов. Планировщик не может быть настроен."
             logger.error(error_msg)
-            self.ui.update_scheduler_status("Ошибка: channels.json не найден")
-            messagebox.showerror("Ошибка конфигурации", error_msg)
-            return
-        
-        try:
-            with open("channels.json", "r", encoding="utf-8") as f:
-                channels = json.load(f)
-        except FileNotFoundError:
-            error_msg = "Файл channels.json не найден. Планировщик не может быть настроен."
-            logger.error(error_msg)
-            self.ui.update_scheduler_status("Ошибка: channels.json не найден")
-            messagebox.showerror("Ошибка конфигурации", error_msg)
-            return
-        except json.JSONDecodeError as e:
-            error_msg = f"Ошибка в формате файла channels.json: {e}. Планировщик не может быть настроен."
-            logger.error(error_msg)
-            self.ui.update_scheduler_status("Ошибка: неверный формат channels.json")
-            messagebox.showerror("Ошибка конфигурации", error_msg)
-            return
-        except Exception as e:
-            error_msg = f"Ошибка при чтении файла channels.json: {e}. Планировщик не может быть настроен."
-            logger.error(error_msg)
-            self.ui.update_scheduler_status("Ошибка: не удалось прочитать channels.json")
+            self.ui.update_scheduler_status("Ошибка: не удалось загрузить каналы")
             messagebox.showerror("Ошибка конфигурации", error_msg)
             return
         
@@ -822,6 +802,8 @@ class MonitoringApp:
 
     def reload_scheduler(self):
         logger.info("Выполняется перезагрузка расписания...")
+        # Очищаем кэш config_manager перед перезагрузкой
+        config_manager.clear_cache()
         self._setup_schedule()
         logger.info("Расписание успешно перезагружено.")
         self.ui.update_scheduler_status("Перезагружено")
@@ -873,28 +855,7 @@ class MonitoringApp:
             return ""
 
     def _load_keywords(self):
-        try:
-            # Проверка существования файла keywords.json
-            if not os.path.exists('keywords.json'):
-                error_msg = "Файл keywords.json не найден. Ключевые слова не загружены."
-                logger.error(error_msg)
-                return set()
-            
-            with open('keywords.json', 'r', encoding='utf-8') as f:
-                data = json.load(f)
-                return set(word.lower() for word in data['keywords'])
-        except FileNotFoundError:
-            error_msg = "Файл keywords.json не найден. Ключевые слова не загружены."
-            logger.error(error_msg)
-            return set()
-        except json.JSONDecodeError as e:
-            error_msg = f"Ошибка в формате файла keywords.json: {e}. Ключевые слова не загружены."
-            logger.error(error_msg)
-            return set()
-        except Exception as e:
-            error_msg = f"Ошибка при загрузке ключевых слов: {e}"
-            logger.error(error_msg)
-            return set()
+        return set(word.lower() for word in config_manager.get_keywords_list())
 
     def _find_keywords_local(self, text, keywords):
         """Улучшенная локальная проверка ключевых слов без использования API."""

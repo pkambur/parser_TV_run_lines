@@ -9,6 +9,7 @@ from utils import setup_logging
 import cv2
 import numpy as np
 from pathlib import Path
+from config_manager import config_manager
 
 # Инициализация логирования
 logger = setup_logging('parser_lines_log.txt')
@@ -19,13 +20,8 @@ force_capture = False
 stop_monitoring = False
 
 def load_channels():
-    """Загрузка конфигурации каналов из JSON файла."""
-    try:
-        with open('channels.json', 'r', encoding='utf-8') as f:
-            return json.load(f)
-    except Exception as e:
-        logger.error(f"Ошибка при загрузке конфигурации каналов: {e}")
-        return {}
+    """Загрузка конфигурации каналов из JSON файла через config_manager."""
+    return config_manager.load_channels()
 
 def parse_interval(interval_str):
     """Парсит строку интервала (например, '1/7') и возвращает количество секунд."""

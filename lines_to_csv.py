@@ -14,6 +14,7 @@ from pathlib import Path
 from typing import List, Tuple, Optional
 import numpy as np
 from collections import Counter
+from config_manager import config_manager
 
 # Настройка логирования
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
@@ -37,13 +38,8 @@ class TextDuplicateChecker:
         self.previous_texts.append(text)
 
 def load_keywords() -> List[str]:
-    try:
-        with open('keywords.json', 'r', encoding='utf-8') as f:
-            keywords = json.load(f)
-        return keywords
-    except Exception as e:
-        logger.error(f"Ошибка загрузки keywords.json: {e}")
-        return []
+    """Загрузка ключевых слов через config_manager."""
+    return config_manager.get_keywords_list()
 
 def preprocess_image(image_path: str) -> np.ndarray:
     try:
