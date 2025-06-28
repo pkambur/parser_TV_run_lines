@@ -64,8 +64,6 @@ class MonitoringApp:
         self.recording_channels = []
         self.lines_monitoring_thread = None
         self.lines_monitoring_running = False
-        self.video_processing_thread = None
-        self.video_processing_running = False
         self.video_recognition_running = False
         self.loop = asyncio.new_event_loop()
         asyncio.set_event_loop(self.loop)
@@ -636,16 +634,33 @@ class MonitoringApp:
 
     def _remove_video_text_from_channel_txt(self, video_file_name, channel_name):
         """Удаляет строку из recognized_text/<channel>.txt по имени видеофайла."""
-        txt_path = Path("recognized_text") / f"{channel_name}.txt"
-        if not txt_path.exists():
+        recognized_dir = Path("recognized_text")
+        
+        # Проверка существования директории recognized_text
+        if not recognized_dir.exists():
+            logger.warning(f"Директория recognized_text не найдена: {recognized_dir}")
             return
-        lines = []
-        with open(txt_path, 'r', encoding='utf-8') as f:
-            lines = f.readlines()
-        with open(txt_path, 'w', encoding='utf-8') as f:
-            for line in lines:
-                if not line.startswith(video_file_name + '\t'):
-                    f.write(line)
+        
+        if not recognized_dir.is_dir():
+            logger.error(f"Путь recognized_text не является директорией: {recognized_dir}")
+            return
+        
+        txt_path = recognized_dir / f"{channel_name}.txt"
+        if not txt_path.exists():
+            logger.warning(f"Файл {txt_path} не найден")
+            return
+        
+        try:
+            lines = []
+            with open(txt_path, 'r', encoding='utf-8') as f:
+                lines = f.readlines()
+            with open(txt_path, 'w', encoding='utf-8') as f:
+                for line in lines:
+                    if not line.startswith(video_file_name + '\t'):
+                        f.write(line)
+            logger.info(f"Удалена строка для видео {video_file_name} из {txt_path}")
+        except Exception as e:
+            logger.error(f"Ошибка при удалении строки для видео {video_file_name} из {txt_path}: {e}")
 
     def _cleanup_recognized_texts_channelwise(self):
         """Удаляет все recognized_text/<channel>.txt файлы."""
@@ -684,12 +699,10 @@ class MonitoringApp:
                 self.rbk_mir24_running = False
                 logger.info("RBK и MIR24 остановлены")
             
-            # Останавливаем распознавание видео
+            # Останавливаем распознавание crop-видео
             if self.video_recognition_running:
                 self.video_recognition_running = False
-                if self.video_processing_thread and self.video_processing_thread.is_alive():
-                    self.video_processing_thread.join(timeout=5)
-                logger.info("Распознавание видео остановлено")
+                logger.info("Распознавание crop-видео остановлено")
             
             # Останавливаем event loop
             if self.loop and not self.loop.is_closed():
@@ -844,67 +857,8 @@ class MonitoringApp:
 
     def start_video_processing(self):
         """Запускает скрипт обработки видеосюжетов в отдельном потоке."""
-        if self.video_processing_running:
-            messagebox.showwarning("Предупреждение", "Обработка сюжетов уже запущена.")
-            return
-
-        try:
-            self.video_processing_running = True
-            self.ui.update_video_processing_status("Выполняется...")
-            
-            self.video_processing_thread = threading.Thread(
-                target=self._run_video_processing_task,
-                daemon=True
-            )
-            self.video_processing_thread.start()
-            
-        except Exception as e:
-            logger.error(f"Ошибка при запуске обработки сюжетов: {e}")
-            self.video_processing_running = False
-            self.ui.update_video_processing_status("Ошибка")
-            messagebox.showerror("Ошибка", f"Не удалось запустить процесс обработки сюжетов: {e}")
-
-    def _run_video_processing_task(self):
-        """Задача, выполняющая запуск video_processor.py."""
-        try:
-            python_executable = sys.executable
-            script_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "video_processor.py")
-            
-            process = subprocess.Popen(
-                [python_executable, script_path],
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
-                text=True,
-                encoding='utf-8',
-                errors='replace'
-            )
-            
-            # Логируем вывод скрипта в реальном времени
-            for line in process.stdout:
-                logger.info(f"[VideoProcessor]: {line.strip()}")
-            
-            stderr_output = process.stderr.read()
-            if stderr_output:
-                logger.error(f"[VideoProcessor Error]: {stderr_output.strip()}")
-
-            process.wait()
-
-            if process.returncode == 0:
-                logger.info("Обработка сюжетов успешно завершена.")
-                self.ui.root.after(0, self.ui.update_video_processing_status, "Завершено")
-                self.ui.root.after(0, messagebox.showinfo, "Успех", "Обработка видеосюжетов успешно завершена.")
-            else:
-                logger.error(f"Скрипт обработки сюжетов завершился с ошибкой (код: {process.returncode}).")
-                self.ui.root.after(0, self.ui.update_video_processing_status, "Ошибка")
-                self.ui.root.after(0, messagebox.showerror, "Ошибка", f"Обработка сюжетов завершилась с ошибкой. Подробности в логах.")
-
-        except Exception as e:
-            logger.error(f"Критическая ошибка в задаче обработки сюжетов: {e}")
-            self.ui.root.after(0, self.ui.update_video_processing_status, "Критическая ошибка")
-        finally:
-            self.video_processing_running = False
-            # Статус уже обновлен, но можно поставить "Ожидание", если нужно
-            # self.ui.root.after(0, self.ui.update_video_processing_status, "Ожидание")
+        messagebox.showinfo("Информация", "Обработка полноценного видео больше не поддерживается. Используйте 'Проверка crop-видео' для обработки crop-роликов.")
+        logger.info("Попытка запуска обработки полноценного видео - функция больше не поддерживается")
 
     def _extract_text_from_image(self, image_path):
         try:
@@ -942,70 +896,125 @@ class MonitoringApp:
             logger.error(error_msg)
             return set()
 
+    def _find_keywords_local(self, text, keywords):
+        """Улучшенная локальная проверка ключевых слов без использования API."""
+        found = []
+        text_lower = text.lower()
+        
+        # Предобработка текста
+        import re
+        text_clean = re.sub(r'\s+', ' ', text_lower).strip()
+        words = text_clean.split()
+        
+        for kw in keywords:
+            kw_lower = kw.lower()
+            kw_found = False
+            
+            # 1. Точное совпадение
+            if kw_lower in text_clean:
+                found.append(kw)
+                logger.debug(f"Найдено точное совпадение ключевого слова '{kw}'")
+                continue
+            
+            # 2. Проверка на уровне слов
+            for word in words:
+                word_clean = re.sub(r'[^\wа-яё]', '', word)
+                if len(word_clean) < 3:
+                    continue
+                
+                if word_clean == kw_lower:
+                    found.append(kw)
+                    logger.debug(f"Найдено точное совпадение слова '{kw}' в '{word_clean}'")
+                    kw_found = True
+                    break
+                
+                if kw_lower in word_clean or word_clean in kw_lower:
+                    found.append(kw)
+                    logger.debug(f"Найдено вхождение ключевого слова '{kw}' в слово '{word_clean}'")
+                    kw_found = True
+                    break
+            
+            if kw_found:
+                continue
+            
+            # 3. Fuzzy matching
+            from difflib import SequenceMatcher
+            for word in words:
+                word_clean = re.sub(r'[^\wа-яё]', '', word)
+                if len(word_clean) < 3:
+                    continue
+                
+                similarity = SequenceMatcher(None, kw_lower, word_clean).ratio()
+                if similarity >= 0.8:
+                    found.append(kw)
+                    logger.debug(f"Найдено fuzzy совпадение '{kw}' ~ '{word_clean}' (схожесть: {similarity:.2f})")
+                    break
+        
+        return found
+
     def _find_keywords_hf(self, text, keywords):
-        """Использует Hugging Face Inference API (Qwen/Qwen2.5-VL-7B-Instruct) для поиска вариаций ключевых слов в тексте."""
-        HF_API_URL = "https://api-inference.huggingface.co/models/Qwen/Qwen2.5-VL-7B-Instruct"
+        """Использует Hugging Face Inference API для поиска вариаций ключевых слов в тексте."""
         HF_API_TOKEN = os.environ.get("HF_API_TOKEN")  # Токен должен быть в переменных окружения
         
         # Проверка существования токена HF_API_TOKEN
         if not HF_API_TOKEN:
             logger.warning("HF_API_TOKEN не найден в переменных окружения, используется локальная проверка")
-            # Возвращаем пустой список, так как без токена API недоступен
-            return []
+            return self._find_keywords_local(text, keywords)
         
+        # Используем более стабильную модель
+        HF_API_URL = "https://api-inference.huggingface.co/models/microsoft/DialoGPT-medium"
         headers = {"Authorization": f"Bearer {HF_API_TOKEN}"}
         found = []
+        
         for kw in keywords:
-            prompt = (
-                f"Instruction: Найди, встречается ли ключевое слово или его смысловая вариация в этом тексте?\n"
-                f"Ключевое слово: \"{kw}\"\n"
-                f"Текст: \"{text}\"\n"
-                f"Ответь только 'yes' или 'no'."
-            )
-            payload = {"inputs": prompt}
             try:
-                response = requests.post(HF_API_URL, headers=headers, json=payload, timeout=60)
+                prompt = f"Does the text contain the keyword '{kw}' or its variation? Answer with 'yes' or 'no'. Text: {text}"
+                payload = {
+                    "inputs": prompt,
+                    "parameters": {
+                        "max_length": 10,
+                        "return_full_text": False
+                    }
+                }
+                
+                response = requests.post(HF_API_URL, headers=headers, json=payload, timeout=30)
+                
                 if response.status_code == 200:
                     result = response.json()
-                    # Ответ может быть строкой или списком с dict/text
+                    # Обработка различных форматов ответа
                     answer = ""
-                    if isinstance(result, dict) and "generated_text" in result:
-                        answer = result["generated_text"].strip().lower()
-                    elif isinstance(result, list) and result and "generated_text" in result[0]:
-                        answer = result[0]["generated_text"].strip().lower()
+                    if isinstance(result, list) and len(result) > 0:
+                        answer = result[0].get('generated_text', '').strip().lower()
+                    elif isinstance(result, dict):
+                        answer = result.get('generated_text', '').strip().lower()
                     elif isinstance(result, str):
                         answer = result.strip().lower()
+                    
                     if "yes" in answer:
                         found.append(kw)
+                        logger.debug(f"Найдено ключевое слово '{kw}' через Hugging Face API")
                 else:
                     logger.warning(f"HF API error: {response.status_code} {response.text}")
-            except Exception as e:
-                logger.error(f"Ошибка Hugging Face API: {e}")
-        return found
-
-    def _cleanup_video_files(self):
-        """Удаляет все видеофайлы из lines_video, если они остались."""
-        # Очищаем lines_video
-        lines_video_dir = Path("lines_video")
-        
-        # Проверка существования директории lines_video
-        if not lines_video_dir.exists():
-            logger.info(f"Директория lines_video не существует, очистка не требуется: {lines_video_dir}")
-            return
-        
-        if not lines_video_dir.is_dir():
-            logger.error(f"Путь lines_video не является директорией: {lines_video_dir}")
-            return
-        
-        for channel_dir in lines_video_dir.iterdir():
-            if not channel_dir.is_dir():
+                    
+            except requests.exceptions.Timeout:
+                logger.warning(f"Таймаут при проверке ключевого слова '{kw}' через Hugging Face API")
                 continue
-            for video_file in channel_dir.glob("*.mp4"):
-                try:
-                    video_file.unlink()
-                    logger.info(f"Удален видеофайл: {video_file}")
-                except Exception as e:
-                    logger.error(f"Ошибка при удалении видеофайла {video_file}: {e}")
+            except requests.exceptions.RequestException as e:
+                logger.warning(f"Ошибка сети при проверке ключевого слова '{kw}' через Hugging Face API: {e}")
+                continue
+            except (ValueError, KeyError) as e:
+                logger.warning(f"Ошибка парсинга ответа для ключевого слова '{kw}' через Hugging Face API: {e}")
+                continue
+            except Exception as e:
+                logger.error(f"Неожиданная ошибка при проверке ключевого слова '{kw}' через Hugging Face API: {e}")
+                continue
+        
+        # Если API не дал результатов, используем локальную проверку
+        if not found:
+            logger.info("Hugging Face API не нашел ключевых слов, используется локальная проверка")
+            found = self._find_keywords_local(text, keywords)
+                
+        return found
 
     def _start_r1_monitoring(self):
         """Запуск мониторинга строк для канала R1 по расписанию."""
@@ -1134,21 +1143,49 @@ class MonitoringApp:
 
     def _cleanup_old_sent_texts(self):
         """Удаляет устаревшие файлы sent_texts_YYYYMMDD.txt, кроме текущего дня."""
-        today_str = datetime.now().strftime('%Y%m%d')
-        for file_path in Path('.').glob('sent_texts_*.txt'):
-            if today_str not in file_path.name:
-                try:
-                    file_path.unlink()
-                    logger.info(f"Удалён устаревший файл: {file_path}")
-                except Exception as e:
-                    logger.error(f"Ошибка при удалении {file_path}: {e}")
+        try:
+            today_str = datetime.now().strftime('%Y%m%d')
+            current_dir = Path('.')
+            
+            # Проверка существования текущей директории
+            if not current_dir.exists():
+                logger.error(f"Текущая директория не найдена: {current_dir}")
+                return
+            
+            if not current_dir.is_dir():
+                logger.error(f"Текущий путь не является директорией: {current_dir}")
+                return
+            
+            for file_path in current_dir.glob('sent_texts_*.txt'):
+                if today_str not in file_path.name:
+                    try:
+                        file_path.unlink()
+                        logger.info(f"Удалён устаревший файл: {file_path}")
+                    except Exception as e:
+                        logger.error(f"Ошибка при удалении {file_path}: {e}")
+        except Exception as e:
+            logger.error(f"Ошибка при очистке устаревших файлов sent_texts: {e}")
 
     def _send_single_video_to_telegram(self, video_path, channel_name, found_keywords):
         """Отправляет одно видео в Telegram."""
         try:
             from telegram_sender import send_files
             caption = f"Канал: {channel_name}\nНайденные ключевые слова: {', '.join(found_keywords)}"
-            return send_files([str(video_path)], caption=caption)
+            
+            # Проверяем размер файла перед отправкой
+            file_size = video_path.stat().st_size
+            file_size_mb = file_size / (1024 * 1024)
+            logger.info(f"Отправка видео {video_path.name} ({file_size_mb:.2f} MB) в Telegram")
+            
+            success = send_files([str(video_path)], caption=caption)
+            
+            if success:
+                logger.info(f"Видео {video_path.name} успешно отправлено в Telegram")
+                return True
+            else:
+                logger.error(f"Не удалось отправить видео {video_path.name} в Telegram")
+                return False
+                
         except Exception as e:
             logger.error(f"Ошибка при отправке видео {video_path}: {e}")
             return False

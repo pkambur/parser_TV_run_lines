@@ -13,6 +13,7 @@ import logging
 from pathlib import Path
 from typing import List, Tuple, Optional
 import numpy as np
+from collections import Counter
 
 # Настройка логирования
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
@@ -68,13 +69,15 @@ def recognize_text(image_path: str) -> str:
 
 def is_readable_text_local(text: str) -> bool:
     """
-    Локальная проверка читаемости текста без использования API.
+    Улучшенная локальная проверка читаемости текста без использования API.
     Текст считается читаемым, если:
     - Содержит ≥3 слов.
     - Содержит ≥10 символов (не считая пробелы).
     - Не состоит только из чисел, знаков препинания или случайных символов.
     - Содержит слова длиной ≥3 символов.
     - Содержит хотя бы одно слово из списка часто встречающихся слов.
+    - Имеет разумное соотношение гласных/согласных.
+    - Не содержит слишком много повторяющихся символов.
     """
     if not text:
         return False
@@ -83,7 +86,8 @@ def is_readable_text_local(text: str) -> bool:
     text = ' '.join(text.split())
     
     # Проверяем минимальную длину текста (без пробелов)
-    if len(text.replace(' ', '')) < 10:
+    text_no_spaces = text.replace(' ', '')
+    if len(text_no_spaces) < 10:
         return False
 
     # Разбиваем на слова
@@ -102,55 +106,88 @@ def is_readable_text_local(text: str) -> bool:
     if not any(len(word) >= 3 for word in words):
         return False
 
-    # Список часто встречающихся слов (русский и английский)
+    # Расширенный список часто встречающихся слов (русский и английский)
     common_words = {
-        'и', 'в', 'на', 'с', 'по', 'для', 'не', 'что', 'как', 'это',
-        'the', 'and', 'to', 'of', 'in', 'for', 'is', 'on', 'that', 'by'
+        # Русские слова
+        'и', 'в', 'на', 'с', 'по', 'для', 'не', 'что', 'как', 'это', 'то', 'так', 'был', 'была', 'были',
+        'быть', 'есть', 'был', 'стал', 'стала', 'стали', 'стать', 'может', 'может', 'должен', 'должна',
+        'должны', 'нужно', 'надо', 'можно', 'нельзя', 'все', 'всех', 'всем', 'всеми', 'всего', 'всей',
+        'всех', 'всегда', 'никогда', 'иногда', 'часто', 'редко', 'очень', 'слишком', 'больше', 'меньше',
+        'лучше', 'хуже', 'выше', 'ниже', 'дальше', 'ближе', 'раньше', 'позже', 'сейчас', 'теперь',
+        'сегодня', 'завтра', 'вчера', 'утром', 'днем', 'вечером', 'ночью', 'год', 'года', 'лет', 'месяц',
+        'месяца', 'неделя', 'недели', 'день', 'дня', 'час', 'часа', 'минута', 'минуты', 'секунда',
+        # Английские слова
+        'the', 'and', 'to', 'of', 'in', 'for', 'is', 'on', 'that', 'by', 'with', 'he', 'as', 'you', 'do',
+        'at', 'this', 'but', 'his', 'from', 'they', 'we', 'say', 'her', 'she', 'or', 'an', 'will', 'my',
+        'one', 'all', 'would', 'there', 'their', 'what', 'so', 'up', 'out', 'if', 'about', 'who', 'get',
+        'which', 'go', 'me', 'when', 'make', 'can', 'like', 'time', 'no', 'just', 'him', 'know', 'take',
+        'people', 'into', 'year', 'your', 'good', 'some', 'could', 'them', 'see', 'other', 'than', 'then',
+        'now', 'look', 'only', 'come', 'its', 'over', 'think', 'also', 'back', 'after', 'use', 'two',
+        'how', 'our', 'work', 'first', 'well', 'way', 'even', 'new', 'want', 'because', 'any', 'these',
+        'give', 'day', 'most', 'us'
     }
     
     # Проверяем наличие хотя бы одного слова из common_words
     if not any(word in common_words for word in words):
         return False
 
+    # Проверяем соотношение гласных/согласных (для русского текста)
+    vowels_ru = 'аеёиоуыэюя'
+    consonants_ru = 'бвгджзйклмнпрстфхцчшщ'
+    vowels_en = 'aeiouy'
+    consonants_en = 'bcdfghjklmnpqrstvwxz'
+    
+    # Определяем язык текста (простая эвристика)
+    ru_chars = sum(1 for c in text_no_spaces if c in vowels_ru + consonants_ru)
+    en_chars = sum(1 for c in text_no_spaces if c in vowels_en + consonants_en)
+    
+    if ru_chars > en_chars:  # Русский текст
+        vowels = sum(1 for c in text_no_spaces if c in vowels_ru)
+        consonants = sum(1 for c in text_no_spaces if c in consonants_ru)
+    else:  # Английский текст
+        vowels = sum(1 for c in text_no_spaces if c in vowels_en)
+        consonants = sum(1 for c in text_no_spaces if c in consonants_en)
+    
+    total_letters = vowels + consonants
+    if total_letters > 0:
+        vowel_ratio = vowels / total_letters
+        # Проверяем, что соотношение гласных/согласных разумное (20-60%)
+        if vowel_ratio < 0.2 or vowel_ratio > 0.6:
+            return False
+
+    # Проверяем на слишком много повторяющихся символов
+    char_counts = Counter(text_no_spaces)
+    most_common_char, most_common_count = char_counts.most_common(1)[0]
+    if most_common_count > len(text_no_spaces) * 0.4:  # Один символ не должен занимать более 40% текста
+        return False
+
+    # Проверяем на слишком много цифр
+    digits = sum(1 for c in text_no_spaces if c.isdigit())
+    if digits > len(text_no_spaces) * 0.5:  # Цифры не должны занимать более 50% текста
+        return False
+
+    # Проверяем на слишком много знаков препинания
+    punctuation = sum(1 for c in text_no_spaces if c in '.,!?()[]{}":;')
+    if punctuation > len(text_no_spaces) * 0.3:  # Знаки препинания не должны занимать более 30% текста
+        return False
+
     return True
 
 def is_readable_text(text: str, image_path: str) -> bool:
     """
-    Проверка читаемости текста. Сначала пытается использовать Hugging Face API,
-    при недоступности API использует локальную проверку.
+    Проверка читаемости текста. Использует локальную проверку,
+    так как Hugging Face API для анализа изображений требует специальных моделей.
     """
     # Проверка существования токена HF_TOKEN
     hf_token = os.getenv('HF_TOKEN')
     if not hf_token:
-        logger.warning("HF_TOKEN не найден в переменных окружения, используется локальная проверка")
+        logger.info("HF_TOKEN не найден в переменных окружения, используется локальная проверка")
         return is_readable_text_local(text)
     
-    try:
-        # Проверка через Hugging Face API
-        headers = {"Authorization": f"Bearer {hf_token}"}
-        payload = {
-            "inputs": [
-                {
-                    "image": image_path,
-                    "text": "Is the text in the image readable and meaningful? Answer with 'Yes' or 'No'."
-                }
-            ]
-        }
-        response = requests.post(
-            "https://api-inference.huggingface.co/models/Qwen/Qwen2.5-VL-7B-Instruct",
-            headers=headers,
-            json=payload,
-            timeout=10
-        )
-        response.raise_for_status()
-        result = response.json()
-        return result.get('text', '').lower() == 'yes'
-    except (requests.exceptions.RequestException, ValueError, KeyError) as e:
-        logger.warning(f"API Hugging Face недоступен ({e}), используется локальная проверка")
-        return is_readable_text_local(text)
-    except Exception as e:
-        logger.error(f"Неизвестная ошибка при обращении к API: {e}")
-        return is_readable_text_local(text)
+    # Для анализа изображений нужны специальные модели, которые могут быть недоступны
+    # Поэтому используем только локальную проверку
+    logger.info("Используется локальная проверка читаемости текста")
+    return is_readable_text_local(text)
 
 def process_file(image_path: str, keywords: List[str], duplicate_checker: TextDuplicateChecker, daily_file_path: str) -> Tuple[Optional[str], Optional[str]]:
     text = recognize_text(image_path)

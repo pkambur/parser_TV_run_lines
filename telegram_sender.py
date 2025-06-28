@@ -10,6 +10,8 @@ import io
 import shutil
 import pandas as pd
 from pathlib import Path
+import cv2
+import tempfile
 
 # Настройка логирования
 def setup_logging():
@@ -52,7 +54,91 @@ processed_dir = Path("screenshots_processed")
 MAX_WIDTH = 1280
 MAX_HEIGHT = 1280
 MAX_FILE_SIZE = 10 * 1024 * 1024  # 10MB
-MAX_VIDEO_SIZE = 2 * 1024 * 1024 * 1024  # 2GB
+MAX_VIDEO_SIZE = 50 * 1024 * 1024  # 50MB (уменьшено с 2GB для надежности)
+
+def compress_video(input_path, output_path=None, target_size_mb=45):
+    """
+    Сжимает видео для соответствия лимитам Telegram.
+    Возвращает путь к сжатому файлу или None в случае ошибки.
+    """
+    try:
+        if output_path is None:
+            # Создаем временный файл
+            temp_dir = tempfile.gettempdir()
+            output_path = os.path.join(temp_dir, f"compressed_{os.path.basename(input_path)}")
+        
+        # Открываем исходное видео
+        cap = cv2.VideoCapture(input_path)
+        if not cap.isOpened():
+            logger.error(f"Не удалось открыть видео для сжатия: {input_path}")
+            return None
+        
+        # Получаем параметры исходного видео
+        fps = cap.get(cv2.CAP_PROP_FPS)
+        width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
+        height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+        total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
+        
+        # Вычисляем новые размеры (максимум 1280x720 для Telegram)
+        max_width, max_height = 1280, 720
+        if width > max_width or height > max_height:
+            ratio = min(max_width / width, max_height / height)
+            new_width = int(width * ratio)
+            new_height = int(height * ratio)
+        else:
+            new_width, new_height = width, height
+        
+        # Создаем VideoWriter с высоким сжатием
+        fourcc = cv2.VideoWriter_fourcc(*'mp4v')
+        out = cv2.VideoWriter(output_path, fourcc, fps, (new_width, new_height))
+        
+        if not out.isOpened():
+            logger.error(f"Не удалось создать VideoWriter для сжатия: {output_path}")
+            cap.release()
+            return None
+        
+        logger.info(f"Начало сжатия видео: {input_path} -> {output_path}")
+        logger.info(f"Исходные размеры: {width}x{height}, новые: {new_width}x{new_height}")
+        
+        frame_count = 0
+        while True:
+            ret, frame = cap.read()
+            if not ret:
+                break
+            
+            # Изменяем размер кадра
+            if new_width != width or new_height != height:
+                frame = cv2.resize(frame, (new_width, new_height))
+            
+            # Записываем кадр
+            out.write(frame)
+            frame_count += 1
+            
+            # Показываем прогресс каждые 100 кадров
+            if frame_count % 100 == 0:
+                progress = (frame_count / total_frames) * 100
+                logger.info(f"Прогресс сжатия: {progress:.1f}% ({frame_count}/{total_frames})")
+        
+        # Освобождаем ресурсы
+        cap.release()
+        out.release()
+        
+        # Проверяем размер сжатого файла
+        compressed_size = os.path.getsize(output_path)
+        compressed_size_mb = compressed_size / (1024 * 1024)
+        
+        logger.info(f"Сжатие завершено: {compressed_size_mb:.2f} MB")
+        
+        if compressed_size_mb > target_size_mb:
+            logger.warning(f"Сжатый файл все еще слишком большой: {compressed_size_mb:.2f} MB > {target_size_mb} MB")
+            # Можно добавить дополнительное сжатие или уменьшение качества
+            return None
+        
+        return output_path
+        
+    except Exception as e:
+        logger.error(f"Ошибка при сжатии видео {input_path}: {e}")
+        return None
 
 def process_image(image_path):
     """Обработка изображения для соответствия требованиям Telegram."""
@@ -258,6 +344,7 @@ async def send_files_with_caption(file_paths, caption=""):
         bot = Bot(token=TELEGRAM_TOKEN, request=httpx_request)
         sent_files = []  # Список для отслеживания успешно отправленных файлов
         available_chats = []  # Список доступных чатов
+        temp_files = []  # Список временных файлов для удаления
 
         # Проверяем доступность чатов
         for chat_id in CHAT_IDS:
@@ -279,23 +366,40 @@ async def send_files_with_caption(file_paths, caption=""):
             if not file_path.exists():
                 logger.warning(f"File not found: {file_path}")
                 continue
+            
             try:
                 file_ext = file_path.suffix.lower()
                 file_size = file_path.stat().st_size
-                # Проверка размера файла
+                file_size_mb = file_size / (1024 * 1024)
+                
+                # Обработка видео файлов
                 if file_ext in ['.mp4', '.avi', '.mkv', '.mov']:
+                    logger.info(f"Обработка видео файла: {file_path} ({file_size_mb:.2f} MB)")
+                    
+                    # Проверяем размер файла
                     if file_size > MAX_VIDEO_SIZE:
-                        logger.warning(f"Видео {file_path} превышает лимит Telegram (2 ГБ) и не будет отправлено.")
-                        continue
-                else:
-                    if file_size > MAX_FILE_SIZE:
-                        logger.warning(f"Файл {file_path} превышает лимит Telegram для документов (10 МБ) и не будет отправлен.")
-                        continue
-                with file_path.open('rb') as f:
-                    for chat_id in available_chats:
-                        try:
-                            if file_ext in ['.mp4', '.avi', '.mkv', '.mov']:
-                                # Отправляем как видео
+                        logger.info(f"Видео {file_path} превышает лимит Telegram (50 МБ), начинаем сжатие...")
+                        
+                        # Сжимаем видео
+                        compressed_path = compress_video(str(file_path), target_size_mb=45)
+                        if compressed_path is None:
+                            logger.error(f"Не удалось сжать видео {file_path}")
+                            continue
+                        
+                        # Используем сжатый файл
+                        actual_file_path = compressed_path
+                        temp_files.append(compressed_path)
+                        compressed_size = os.path.getsize(compressed_path)
+                        compressed_size_mb = compressed_size / (1024 * 1024)
+                        logger.info(f"Видео сжато: {compressed_size_mb:.2f} MB")
+                    else:
+                        actual_file_path = str(file_path)
+                        logger.info(f"Видео {file_path} подходит по размеру ({file_size_mb:.2f} MB)")
+                    
+                    # Отправляем видео
+                    with open(actual_file_path, 'rb') as f:
+                        for chat_id in available_chats:
+                            try:
                                 await bot.send_video(
                                     chat_id=chat_id,
                                     video=f,
@@ -303,25 +407,55 @@ async def send_files_with_caption(file_paths, caption=""):
                                     parse_mode=ParseMode.HTML,
                                     supports_streaming=True
                                 )
-                            else:
-                                # Отправляем как документ
+                                logger.info(f"Видео {file_path} успешно отправлено в Telegram chat {chat_id}")
+                                sent_files.append(str(file_path))
+                                break  # Отправляем только в первый доступный чат
+                            except Exception as e:
+                                logger.error(f"Ошибка отправки видео в chat {chat_id}: {e}")
+                                if "Request Entity Too Large" in str(e):
+                                    logger.error(f"Файл все еще слишком большой для Telegram: {actual_file_path}")
+                                    break
+                                continue
+                
+                else:
+                    # Обработка других файлов (изображения, документы)
+                    if file_size > MAX_FILE_SIZE:
+                        logger.warning(f"Файл {file_path} превышает лимит Telegram для документов (10 МБ) и не будет отправлен.")
+                        continue
+                    
+                    with file_path.open('rb') as f:
+                        for chat_id in available_chats:
+                            try:
                                 await bot.send_document(
                                     chat_id=chat_id,
                                     document=f,
                                     caption=caption,
                                     parse_mode=ParseMode.HTML
                                 )
-                            logger.info(f"Sent file {file_path} to Telegram chat {chat_id}")
-                        except Exception as e:
-                            logger.error(f"Error sending file to chat {chat_id}: {e}")
-                sent_files.append(str(file_path))
+                                logger.info(f"Файл {file_path} успешно отправлен в Telegram chat {chat_id}")
+                                sent_files.append(str(file_path))
+                                break  # Отправляем только в первый доступный чат
+                            except Exception as e:
+                                logger.error(f"Ошибка отправки файла в chat {chat_id}: {e}")
+                                continue
+                
             except Exception as e:
-                logger.error(f"Error sending file {file_path}: {e}")
+                logger.error(f"Ошибка обработки файла {file_path}: {e}")
+                continue
+        
+        # Удаляем временные файлы
+        for temp_file in temp_files:
+            try:
+                if os.path.exists(temp_file):
+                    os.remove(temp_file)
+                    logger.info(f"Удален временный файл: {temp_file}")
+            except Exception as e:
+                logger.error(f"Ошибка удаления временного файла {temp_file}: {e}")
 
         return len(sent_files) > 0
 
     except Exception as e:
-        logger.error(f"Error sending files to Telegram: {e}")
+        logger.error(f"Ошибка отправки файлов в Telegram: {e}")
         raise
 
 def send_files(file_paths, caption=""):
