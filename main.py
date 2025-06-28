@@ -77,6 +77,10 @@ class MonitoringApp:
         self.start_status_server()
         self.start_scheduler()
         self._cleanup_old_sent_texts()
+        
+        # Кэш для результатов Hugging Face API
+        self.hf_cache = {}
+        self.hf_cache_max_size = 1000  # Максимальное количество кэшированных результатов
 
     def start_status_server(self):
         """Запускает HTTP-сервер для получения статусов от дочерних процессов."""
@@ -683,10 +687,40 @@ class MonitoringApp:
             except Exception as e:
                 logger.error(f"Ошибка при удалении файла {txt_path}: {e}")
 
+    def _cleanup_video_files(self):
+        """Удаляет все видеофайлы из папки lines_video."""
+        lines_video_dir = Path("lines_video")
+        
+        # Проверка существования директории lines_video
+        if not lines_video_dir.exists():
+            logger.info(f"Директория lines_video не существует, очистка не требуется: {lines_video_dir}")
+            return
+        
+        if not lines_video_dir.is_dir():
+            logger.error(f"Путь lines_video не является директорией: {lines_video_dir}")
+            return
+        
+        deleted_count = 0
+        for channel_dir in lines_video_dir.iterdir():
+            if not channel_dir.is_dir():
+                continue
+            for video_file in channel_dir.glob("*.mp4"):
+                try:
+                    video_file.unlink()
+                    deleted_count += 1
+                    logger.info(f"Удален видеофайл: {video_file}")
+                except Exception as e:
+                    logger.error(f"Ошибка при удалении видеофайла {video_file}: {e}")
+        
+        logger.info(f"Очистка видеофайлов завершена. Удалено файлов: {deleted_count}")
+
     def cleanup(self):
         """Очистка ресурсов при закрытии приложения."""
         try:
             logger.info("Начало очистки ресурсов...")
+            
+            # Очищаем кэш Hugging Face API
+            self.clear_hf_cache()
             
             # Останавливаем мониторинг строк
             if self.lines_monitoring_running:
@@ -914,7 +948,7 @@ class MonitoringApp:
         return found
 
     def _find_keywords_hf(self, text, keywords):
-        """Использует Hugging Face Inference API для поиска вариаций ключевых слов в тексте."""
+        """Использует Hugging Face Inference API для поиска ключевых слов в тексте одним запросом с кэшированием."""
         HF_API_TOKEN = os.environ.get("HF_API_TOKEN")  # Токен должен быть в переменных окружения
         
         # Проверка существования токена HF_API_TOKEN
@@ -922,60 +956,126 @@ class MonitoringApp:
             logger.warning("HF_API_TOKEN не найден в переменных окружения, используется локальная проверка")
             return self._find_keywords_local(text, keywords)
         
+        # Создаем ключ кэша на основе текста и ключевых слов
+        cache_key = f"{hash(text)}:{hash(tuple(sorted(keywords)))}"
+        
+        # Проверяем кэш
+        if cache_key in self.hf_cache:
+            logger.debug("Используется кэшированный результат Hugging Face API")
+            return self.hf_cache[cache_key]
+        
         # Используем более стабильную модель
         HF_API_URL = "https://api-inference.huggingface.co/models/microsoft/DialoGPT-medium"
         headers = {"Authorization": f"Bearer {HF_API_TOKEN}"}
         found = []
         
-        for kw in keywords:
-            try:
-                prompt = f"Does the text contain the keyword '{kw}' or its variation? Answer with 'yes' or 'no'. Text: {text}"
-                payload = {
-                    "inputs": prompt,
-                    "parameters": {
-                        "max_length": 10,
-                        "return_full_text": False
-                    }
+        try:
+            # Создаем один запрос для всех ключевых слов
+            keywords_list = ', '.join(keywords)
+            prompt = f"""Analyze the following text and identify which keywords from the list are present or have variations.
+
+Keywords to check: {keywords_list}
+
+Text to analyze: {text}
+
+Respond with only the keywords that are found, separated by commas. If no keywords are found, respond with "none".
+
+Example responses:
+- "пожар, МЧС, спасатели"
+- "none"
+- "авария, ДТП"
+"""
+            
+            payload = {
+                "inputs": prompt,
+                "parameters": {
+                    "max_length": 100,
+                    "return_full_text": False,
+                    "temperature": 0.1,
+                    "do_sample": False
                 }
+            }
+            
+            response = requests.post(HF_API_URL, headers=headers, json=payload, timeout=30)
+            
+            if response.status_code == 200:
+                result = response.json()
+                # Обработка различных форматов ответа
+                answer = ""
+                if isinstance(result, list) and len(result) > 0:
+                    answer = result[0].get('generated_text', '').strip().lower()
+                elif isinstance(result, dict):
+                    answer = result.get('generated_text', '').strip().lower()
+                elif isinstance(result, str):
+                    answer = result.strip().lower()
                 
-                response = requests.post(HF_API_URL, headers=headers, json=payload, timeout=30)
-                
-                if response.status_code == 200:
-                    result = response.json()
-                    # Обработка различных форматов ответа
-                    answer = ""
-                    if isinstance(result, list) and len(result) > 0:
-                        answer = result[0].get('generated_text', '').strip().lower()
-                    elif isinstance(result, dict):
-                        answer = result.get('generated_text', '').strip().lower()
-                    elif isinstance(result, str):
-                        answer = result.strip().lower()
+                # Парсим ответ и находим ключевые слова
+                if answer and answer != "none":
+                    # Удаляем лишние символы и разбиваем по запятым
+                    answer_clean = answer.replace('\n', ' ').replace('"', '').replace("'", "")
+                    found_keywords = [kw.strip() for kw in answer_clean.split(',') if kw.strip()]
                     
-                    if "yes" in answer:
-                        found.append(kw)
-                        logger.debug(f"Найдено ключевое слово '{kw}' через Hugging Face API")
+                    # Проверяем, что найденные слова действительно есть в нашем списке
+                    for found_kw in found_keywords:
+                        # Ищем точное совпадение или близкое совпадение
+                        for original_kw in keywords:
+                            if (found_kw == original_kw.lower() or 
+                                found_kw in original_kw.lower() or 
+                                original_kw.lower() in found_kw):
+                                if original_kw not in found:
+                                    found.append(original_kw)
+                                    logger.debug(f"Найдено ключевое слово '{original_kw}' через Hugging Face API")
+                                break
+                    
+                    logger.info(f"Hugging Face API нашел {len(found)} ключевых слов: {found}")
                 else:
-                    logger.warning(f"HF API error: {response.status_code} {response.text}")
+                    logger.info("Hugging Face API не нашел ключевых слов")
                     
-            except requests.exceptions.Timeout:
-                logger.warning(f"Таймаут при проверке ключевого слова '{kw}' через Hugging Face API")
-                continue
-            except requests.exceptions.RequestException as e:
-                logger.warning(f"Ошибка сети при проверке ключевого слова '{kw}' через Hugging Face API: {e}")
-                continue
-            except (ValueError, KeyError) as e:
-                logger.warning(f"Ошибка парсинга ответа для ключевого слова '{kw}' через Hugging Face API: {e}")
-                continue
-            except Exception as e:
-                logger.error(f"Неожиданная ошибка при проверке ключевого слова '{kw}' через Hugging Face API: {e}")
-                continue
+            else:
+                logger.warning(f"HF API error: {response.status_code} {response.text}")
+                # При ошибке API используем локальную проверку
+                found = self._find_keywords_local(text, keywords)
+                
+        except requests.exceptions.Timeout:
+            logger.warning("Таймаут при проверке ключевых слов через Hugging Face API")
+            found = self._find_keywords_local(text, keywords)
+        except requests.exceptions.RequestException as e:
+            logger.warning(f"Ошибка сети при проверке ключевых слов через Hugging Face API: {e}")
+            found = self._find_keywords_local(text, keywords)
+        except (ValueError, KeyError) as e:
+            logger.warning(f"Ошибка парсинга ответа Hugging Face API: {e}")
+            found = self._find_keywords_local(text, keywords)
+        except Exception as e:
+            logger.error(f"Неожиданная ошибка при проверке ключевых слов через Hugging Face API: {e}")
+            found = self._find_keywords_local(text, keywords)
         
         # Если API не дал результатов, используем локальную проверку
         if not found:
             logger.info("Hugging Face API не нашел ключевых слов, используется локальная проверка")
             found = self._find_keywords_local(text, keywords)
+        
+        # Сохраняем результат в кэш
+        self._add_to_hf_cache(cache_key, found)
                 
         return found
+    
+    def _add_to_hf_cache(self, cache_key, result):
+        """Добавляет результат в кэш Hugging Face API с ограничением размера."""
+        # Если кэш переполнен, удаляем старые записи
+        if len(self.hf_cache) >= self.hf_cache_max_size:
+            # Удаляем 20% старых записей
+            keys_to_remove = list(self.hf_cache.keys())[:self.hf_cache_max_size // 5]
+            for key in keys_to_remove:
+                del self.hf_cache[key]
+            logger.debug(f"Очищен кэш Hugging Face API, удалено {len(keys_to_remove)} записей")
+        
+        self.hf_cache[cache_key] = result
+        logger.debug(f"Добавлен результат в кэш Hugging Face API, размер кэша: {len(self.hf_cache)}")
+    
+    def clear_hf_cache(self):
+        """Очищает кэш Hugging Face API."""
+        self.hf_cache.clear()
+        logger.info("Кэш Hugging Face API очищен")
 
     def _start_r1_monitoring(self):
         """Запуск мониторинга строк для канала R1 по расписанию."""
@@ -1144,7 +1244,7 @@ class MonitoringApp:
                 logger.info(f"Видео {video_path.name} успешно отправлено в Telegram")
                 return True
             else:
-                logger.error(f"Не удалось отправить видео {video_path.name} в Telegram")
+                logger.error(f"Не удалось отправить видео {video_path.name} в Telegram (функция send_files вернула False)")
                 return False
                 
         except Exception as e:

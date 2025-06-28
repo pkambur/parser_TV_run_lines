@@ -129,6 +129,12 @@ class MonitoringUI:
         self.video_check_status = ttk.Label(rbk_mir24_frame, text="Статус проверки: Ожидание")
         self.video_check_status.pack(fill="x", pady=5)
         
+        # Кнопка очистки кэша Hugging Face API
+        self.clear_hf_cache_button = ttk.Button(rbk_mir24_frame, text="Очистить кэш API", command=self.app.clear_hf_cache)
+        self.clear_hf_cache_button.pack(fill="x", pady=2)
+        # Tooltip для кнопки очистки кэша
+        self._add_tooltip(self.clear_hf_cache_button, "Очистить кэш результатов Hugging Face API")
+        
         self.status_label = ttk.Label(self.sidebar, text="Готов к работе")
         self.status_label.pack(side="bottom", fill="x", padx=10, pady=5)
 
