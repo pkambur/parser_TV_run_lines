@@ -47,27 +47,12 @@ logger = setup_logging()
 TELEGRAM_TOKEN = "7014463362:AAEDPF4MzfgxcZBwClW7nTONtJqk_04uJ4g"
 CHAT_IDS = [984259692]  # Убраны кавычки, так как это должны быть числа 117436228
 processed_dir = Path("screenshots_processed")
-video_dir = Path("video")
 
 # Максимальные размеры для Telegram
 MAX_WIDTH = 1280
 MAX_HEIGHT = 1280
 MAX_FILE_SIZE = 10 * 1024 * 1024  # 10MB
 MAX_VIDEO_SIZE = 2 * 1024 * 1024 * 1024  # 2GB
-
-def get_video_files():
-    """Получение списка видеофайлов из подпапок."""
-    video_files = []
-    try:
-        for channel_name in video_dir.iterdir():
-            channel_dir = channel_name
-            if channel_dir.is_dir():
-                for filename in channel_dir.iterdir():
-                    if filename.suffix.lower() in ['.mp4', '.avi', '.mkv']:
-                        video_files.append(str(filename))
-    except Exception as e:
-        logger.error(f"Ошибка при получении списка видеофайлов: {e}")
-    return video_files
 
 def process_image(image_path):
     """Обработка изображения для соответствия требованиям Telegram."""
@@ -241,16 +226,6 @@ async def send_to_telegram(excel_file, screenshot_files):
             except Exception as e:
                 logger.error(f"Error deleting file {file_path}: {e}")
 
-        # Удаляем пустые директории
-        try:
-            for channel_name in os.listdir(video_dir):
-                channel_dir = os.path.join(video_dir, channel_name)
-                if os.path.isdir(channel_dir) and not os.listdir(channel_dir):
-                    os.rmdir(channel_dir)
-                    logger.info(f"Deleted empty directory: {channel_dir}")
-        except Exception as e:
-            logger.error(f"Error cleaning up empty directories: {e}")
-
     except Exception as e:
         logger.error(f"Error sending to Telegram: {e}")
         raise
@@ -263,87 +238,6 @@ def send_report_files(excel_file, screenshot_files):
         logger.info("Files sent and deleted successfully")
     except Exception as e:
         logger.error(f"Failed to send files: {e}")
-        raise
-
-async def send_video_files():
-    """Отправка только видео файлов в Telegram."""
-    try:
-        bot = Bot(token=TELEGRAM_TOKEN)
-        sent_files = []  # Список для отслеживания успешно отправленных файлов
-        available_chats = []  # Список доступных чатов
-
-        # Проверяем доступность чатов
-        for chat_id in CHAT_IDS:
-            try:
-                await bot.get_chat(chat_id)
-                logger.info(f"Chat {chat_id} is available")
-                available_chats.append(chat_id)
-            except Exception as e:
-                logger.error(f"Chat {chat_id} is not available: {e}")
-                continue
-
-        if not available_chats:
-            logger.error("No available chats found")
-            raise Exception("No available chats found")
-
-        # Send video files
-        video_files = get_video_files()
-        if video_files:
-            for video_path in video_files:
-                try:
-                    with open(video_path, 'rb') as f:
-                        for chat_id in available_chats:
-                            try:
-                                await bot.send_video(
-                                    chat_id=chat_id,
-                                    video=f,
-                                    caption=f"Video: {os.path.basename(video_path)}",
-                                    parse_mode=ParseMode.HTML,
-                                    supports_streaming=True
-                                )
-                                logger.info(f"Sent video {video_path} to Telegram chat {chat_id}")
-                            except Exception as e:
-                                logger.error(f"Error sending video to chat {chat_id}: {e}")
-                    sent_files.append(video_path)
-                except Exception as e:
-                    logger.error(f"Error sending video {video_path}: {e}")
-        else:
-            logger.info("No videos to send")
-
-        # Удаляем отправленные файлы
-        for file_path in sent_files:
-            try:
-                if os.path.isfile(file_path):
-                    os.remove(file_path)
-                    logger.info(f"Deleted file after sending: {file_path}")
-                elif os.path.isdir(file_path):
-                    shutil.rmtree(file_path)
-                    logger.info(f"Deleted directory after sending: {file_path}")
-            except Exception as e:
-                logger.error(f"Error deleting file {file_path}: {e}")
-
-        # Удаляем пустые директории
-        try:
-            for channel_name in os.listdir(video_dir):
-                channel_dir = os.path.join(video_dir, channel_name)
-                if os.path.isdir(channel_dir) and not os.listdir(channel_dir):
-                    os.rmdir(channel_dir)
-                    logger.info(f"Deleted empty directory: {channel_dir}")
-        except Exception as e:
-            logger.error(f"Error cleaning up empty directories: {e}")
-
-    except Exception as e:
-        logger.error(f"Error sending to Telegram: {e}")
-        raise
-
-def send_video_files_sync():
-    """Send video files to Telegram."""
-    import asyncio
-    try:
-        asyncio.run(send_video_files())
-        logger.info("Video files sent and deleted successfully")
-    except Exception as e:
-        logger.error(f"Failed to send video files: {e}")
         raise
 
 async def send_files_with_caption(file_paths, caption=""):

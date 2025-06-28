@@ -100,33 +100,22 @@ class MonitoringApp:
             now_str = get_current_time_str()
             channels_data = load_channels()
             video_channels = ['RBK', 'MIR24', 'RenTV', 'NTV', 'TVC']
-            channels_in_schedule = []
             channels_in_lines = []
             for name in video_channels:
                 info = channels_data.get(name)
                 if not info:
                     continue
-                schedule_times = set(info.get("schedule", []))
                 lines_times = set(info.get("lines", []))
-                if now_str in schedule_times:
-                    channels_in_schedule.append(name)
                 if now_str in lines_times:
                     channels_in_lines.append(name)
-            if channels_in_schedule:
-                import tkinter
-                messagebox.showwarning(
-                    "Выпуск новостей",
-                    f"Уже идет запись Выпуска новостей на телеканале(ах): {', '.join(channels_in_schedule)}"
-                )
-                return
             if channels_in_lines:
                 import tkinter
                 messagebox.showwarning(
                     "Бегущие строки",
-                    "Бегущие строки уже записываются"
+                    f"Бегущие строки уже записываются на канале(ах): {', '.join(channels_in_lines)}"
                 )
                 return
-            # Если нет совпадений с schedule или lines, всегда запускаем crop-запись
+            # Если нет совпадений с lines, запускаем crop-запись
             self.recording_channels.clear()
             self.recording_channels.extend(video_channels)
             for channel in video_channels:
@@ -435,9 +424,9 @@ class MonitoringApp:
             logger.error(f"Ошибка при проверке новых файлов: {e}")
 
     def check_and_send_videos(self):
-        """Запускает полный цикл проверки видео и отправки в Telegram."""
+        """Запускает полный цикл проверки crop-видео и отправки в Telegram."""
         if self.video_recognition_running:
-            messagebox.showwarning("Предупреждение", "Проверка видео уже запущена.")
+            messagebox.showwarning("Предупреждение", "Проверка crop-видео уже запущена.")
             return
 
         try:
@@ -452,28 +441,37 @@ class MonitoringApp:
             thread.start()
             
         except Exception as e:
-            logger.error(f"Ошибка при запуске проверки и отправки видео: {e}")
+            logger.error(f"Ошибка при запуске проверки и отправки crop-видео: {e}")
             self.video_recognition_running = False
             self.ui.update_video_check_status("Ошибка")
             messagebox.showerror("Ошибка", f"Не удалось запустить процесс: {e}")
 
     def _run_check_and_send_task(self):
-        """Задача, выполняющая распознавание, поиск и отправку видео."""
-        summary_title = "Результат проверки видео"
+        """Задача, выполняющая распознавание, поиск и отправку crop-видео."""
+        summary_title = "Результат проверки crop-видео"
         try:
-            video_dir = Path("lines_video")
-            if not video_dir.exists() or not any(video_dir.glob("**/*.mp4")):
-                logger.warning("В папке lines_video нет видео для проверки.")
-                self.ui.root.after(0, self.ui.update_status, "Видео для проверки не найдены.")
+            # Проверяем только папку lines_video (crop видео)
+            lines_video_dir = Path("lines_video")
+            
+            # Проверяем наличие видео в папке lines_video
+            has_lines_videos = lines_video_dir.exists() and any(lines_video_dir.glob("**/*.mp4"))
+            
+            if not has_lines_videos:
+                logger.warning("В папке lines_video нет crop-видео для проверки.")
+                self.ui.root.after(0, self.ui.update_status, "Crop-видео для проверки не найдены.")
                 self.ui.root.after(0, messagebox.showinfo, summary_title, "В папке `lines_video` нет файлов для проверки.")
                 return
 
-            # --- Этап 1: Распознавание текста из видео ---
-            logger.info("Начало распознавания текста из видео")
-            self.ui.root.after(0, self.ui.update_status, "Распознавание текста из видео...")
-            self._recognize_text_in_videos_to_channel_txt(video_dir)
+            # --- Этап 1: Распознавание текста из crop-видео ---
+            logger.info("Начало распознавания текста из crop-видео")
+            self.ui.root.after(0, self.ui.update_status, "Распознавание текста из crop-видео...")
+            
+            # Обрабатываем crop-видео из папки lines_video
+            logger.info("Обработка crop-видео из папки lines_video")
+            self._recognize_text_in_videos_to_channel_txt(lines_video_dir)
+            
             logger.info("Распознавание завершено.")
-            self.ui.root.after(0, self.ui.update_status, "Распознавание текста из видео завершено.")
+            self.ui.root.after(0, self.ui.update_status, "Распознавание текста из crop-видео завершено.")
 
             # --- Этап 2: Поиск ключевых слов и отправка видео ---
             self.ui.root.after(0, self.ui.update_video_check_status, "Выполняется: Поиск ключевых слов...")
@@ -481,15 +479,15 @@ class MonitoringApp:
             videos_to_send = self._get_videos_with_keywords_hf_channelwise()
 
             if not videos_to_send:
-                self.ui.root.after(0, self.ui.update_status, "Видео с ключевыми словами не найдены. Очистка...")
-                logger.info("Видео с ключевыми словами не найдены. Все видеофайлы будут удалены.")
+                self.ui.root.after(0, self.ui.update_status, "Crop-видео с ключевыми словами не найдены. Очистка...")
+                logger.info("Crop-видео с ключевыми словами не найдены. Все видеофайлы будут удалены.")
                 self._cleanup_video_files()
                 self._cleanup_recognized_texts_channelwise()
-                self.ui.root.after(0, messagebox.showinfo, summary_title, "Проверка завершена. Видео с ключевыми словами не найдены. Все видеофайлы удалены.")
+                self.ui.root.after(0, messagebox.showinfo, summary_title, "Проверка завершена. Crop-видео с ключевыми словами не найдены. Все видеофайлы удалены.")
                 return
 
-            logger.info(f"Найдено {len(videos_to_send)} видео с ключевыми словами")
-            self.ui.root.after(0, self.ui.update_status, f"Отправка {len(videos_to_send)} видео...")
+            logger.info(f"Найдено {len(videos_to_send)} crop-видео с ключевыми словами")
+            self.ui.root.after(0, self.ui.update_status, f"Отправка {len(videos_to_send)} crop-видео...")
 
             sent_count = 0
             for video_info in videos_to_send:
@@ -499,28 +497,28 @@ class MonitoringApp:
                     found_keywords = video_info['found_keywords']
                     if self._send_single_video_to_telegram(video_path, channel_name, found_keywords):
                         sent_count += 1
-                        logger.info(f"Видео {video_path.name} отправлено в Telegram")
+                        logger.info(f"Crop-видео {video_path.name} отправлено в Telegram")
                         video_path.unlink(missing_ok=True)
                         self._remove_video_text_from_channel_txt(video_path.name, channel_name)
                     else:
-                        logger.error(f"Не удалось отправить видео {video_path.name}")
+                        logger.error(f"Не удалось отправить crop-видео {video_path.name}")
                 except Exception as e:
-                    logger.error(f"Ошибка при отправке видео {video_info.get('video_path', 'unknown')}: {e}")
+                    logger.error(f"Ошибка при отправке crop-видео {video_info.get('video_path', 'unknown')}: {e}")
 
             self._cleanup_video_files()
             self._cleanup_recognized_texts_channelwise()
 
-            final_status_msg = f"Отправлено {sent_count} из {len(videos_to_send)} видео. Очистка завершена."
+            final_status_msg = f"Отправлено {sent_count} из {len(videos_to_send)} crop-видео. Очистка завершена."
             self.ui.root.after(0, self.ui.update_status, final_status_msg)
-            logger.info(f"Отправка завершена. Отправлено {sent_count} видео, все файлы удалены")
+            logger.info(f"Отправка завершена. Отправлено {sent_count} crop-видео, все файлы удалены")
 
-            summary_message = f"Отправка завершена.\n\nНайдено видео с ключевыми словами: {len(videos_to_send)}\nУспешно отправлено: {sent_count}"
+            summary_message = f"Отправка завершена.\n\nНайдено crop-видео с ключевыми словами: {len(videos_to_send)}\nУспешно отправлено: {sent_count}"
             if sent_count < len(videos_to_send):
-                summary_message += "\n\nНекоторые видео не удалось отправить. Подробности смотрите в логах."
+                summary_message += "\n\nНекоторые crop-видео не удалось отправить. Подробности смотрите в логах."
             self.ui.root.after(0, messagebox.showinfo, summary_title, summary_message)
 
         except Exception as e:
-            logger.error(f"Ошибка в процессе проверки и отправки видео: {e}")
+            logger.error(f"Ошибка в процессе проверки и отправки crop-видео: {e}")
             self.ui.root.after(0, self.ui.update_status, f"Ошибка: {str(e)}")
             self.ui.root.after(0, self.ui.update_video_check_status, "Ошибка")
             self.ui.root.after(0, messagebox.showerror, "Ошибка", f"В процессе проверки произошла ошибка:\n{e}")
@@ -529,7 +527,7 @@ class MonitoringApp:
             self.ui.root.after(0, self.ui.update_video_check_status, "Завершено")
 
     def _recognize_text_in_videos_to_channel_txt(self, video_dir):
-        """Распознаёт текст из всех видеофайлов в lines_video и сохраняет результаты в отдельные txt по каналам."""
+        """Распознаёт текст из всех crop-видеофайлов и сохраняет результаты в отдельные txt по каналам."""
         recognized_dir = Path("recognized_text")
         recognized_dir.mkdir(exist_ok=True)
         channel_files = {}
@@ -575,6 +573,7 @@ class MonitoringApp:
         recognized_dir = Path("recognized_text")
         keywords = list(self._load_keywords())
         videos_to_send = []
+        
         for txt_path in recognized_dir.glob("*.txt"):
             channel_name = txt_path.stem
             with open(txt_path, 'r', encoding='utf-8') as f:
@@ -583,11 +582,17 @@ class MonitoringApp:
                         video_file, text = line.strip().split('\t', 1)
                         found_keywords = self._find_keywords_hf(text, keywords)
                         if found_keywords:
-                            videos_to_send.append({
-                                'video_path': Path("lines_video") / channel_name / video_file,
-                                'channel': channel_name,
-                                'found_keywords': found_keywords
-                            })
+                            # Ищем видео только в lines_video (crop видео)
+                            video_path = Path("lines_video") / channel_name / video_file
+                            
+                            if video_path.exists():
+                                videos_to_send.append({
+                                    'video_path': video_path,
+                                    'channel': channel_name,
+                                    'found_keywords': found_keywords
+                                })
+                            else:
+                                logger.warning(f"Crop-видео {video_file} не найдено в lines_video для канала {channel_name}")
                     except Exception as e:
                         logger.error(f"Ошибка при обработке строки recognized_text/{txt_path.name}: {e}")
         return videos_to_send
@@ -694,8 +699,37 @@ class MonitoringApp:
 
     def _setup_schedule(self):
         schedule.clear()
-        with open("channels.json", "r", encoding="utf-8") as f:
-            channels = json.load(f)
+        
+        # Проверка существования файла channels.json
+        if not os.path.exists("channels.json"):
+            error_msg = "Файл channels.json не найден. Планировщик не может быть настроен."
+            logger.error(error_msg)
+            self.ui.update_scheduler_status("Ошибка: channels.json не найден")
+            messagebox.showerror("Ошибка конфигурации", error_msg)
+            return
+        
+        try:
+            with open("channels.json", "r", encoding="utf-8") as f:
+                channels = json.load(f)
+        except FileNotFoundError:
+            error_msg = "Файл channels.json не найден. Планировщик не может быть настроен."
+            logger.error(error_msg)
+            self.ui.update_scheduler_status("Ошибка: channels.json не найден")
+            messagebox.showerror("Ошибка конфигурации", error_msg)
+            return
+        except json.JSONDecodeError as e:
+            error_msg = f"Ошибка в формате файла channels.json: {e}. Планировщик не может быть настроен."
+            logger.error(error_msg)
+            self.ui.update_scheduler_status("Ошибка: неверный формат channels.json")
+            messagebox.showerror("Ошибка конфигурации", error_msg)
+            return
+        except Exception as e:
+            error_msg = f"Ошибка при чтении файла channels.json: {e}. Планировщик не может быть настроен."
+            logger.error(error_msg)
+            self.ui.update_scheduler_status("Ошибка: не удалось прочитать channels.json")
+            messagebox.showerror("Ошибка конфигурации", error_msg)
+            return
+        
         channel_methods = {
             "R1": self._start_r1_monitoring,
             "Zvezda": self._start_zvezda_monitoring,
@@ -719,7 +753,7 @@ class MonitoringApp:
                 if method:
                     for t in lines_times:
                         schedule.every().day.at(t).do(method)
-                        logger.info(f"Добавлено расписание для {channel} ('lines'): {t}")
+                        logger.info(f"Добавлено расписание для {channel} (lines): {t}")
         schedule.every().day.at("22:00").do(self._send_daily_file_to_telegram)
         logger.info("Добавлено расписание отправки ежедневного файла в Telegram: 22:00")
         schedule.every().day.at("23:00").do(self._send_daily_sent_texts_to_telegram)
@@ -838,11 +872,26 @@ class MonitoringApp:
 
     def _load_keywords(self):
         try:
+            # Проверка существования файла keywords.json
+            if not os.path.exists('keywords.json'):
+                error_msg = "Файл keywords.json не найден. Ключевые слова не загружены."
+                logger.error(error_msg)
+                return set()
+            
             with open('keywords.json', 'r', encoding='utf-8') as f:
                 data = json.load(f)
                 return set(word.lower() for word in data['keywords'])
+        except FileNotFoundError:
+            error_msg = "Файл keywords.json не найден. Ключевые слова не загружены."
+            logger.error(error_msg)
+            return set()
+        except json.JSONDecodeError as e:
+            error_msg = f"Ошибка в формате файла keywords.json: {e}. Ключевые слова не загружены."
+            logger.error(error_msg)
+            return set()
         except Exception as e:
-            logger.error(f"Ошибка при загрузке ключевых слов: {e}")
+            error_msg = f"Ошибка при загрузке ключевых слов: {e}"
+            logger.error(error_msg)
             return set()
 
     def _find_keywords_hf(self, text, keywords):
@@ -881,17 +930,17 @@ class MonitoringApp:
 
     def _cleanup_video_files(self):
         """Удаляет все видеофайлы из lines_video, если они остались."""
-        video_dir = Path("lines_video")
-        if not video_dir.exists():
-            return
-        for channel_dir in video_dir.iterdir():
-            if not channel_dir.is_dir():
-                continue
-            for video_file in channel_dir.glob("*.mp4"):
-                try:
-                    video_file.unlink()
-                except Exception:
-                    pass
+        # Очищаем lines_video
+        lines_video_dir = Path("lines_video")
+        if lines_video_dir.exists():
+            for channel_dir in lines_video_dir.iterdir():
+                if not channel_dir.is_dir():
+                    continue
+                for video_file in channel_dir.glob("*.mp4"):
+                    try:
+                        video_file.unlink()
+                    except Exception:
+                        pass
 
     def _start_r1_monitoring(self):
         """Запуск мониторинга строк для канала R1 по расписанию."""
@@ -952,7 +1001,7 @@ class MonitoringApp:
             try:
                 video_channels = ['RBK', 'MIR24']
                 future = asyncio.run_coroutine_threadsafe(
-                    process_rbk_mir24(self, self.ui, True, channels=video_channels, force_crop=True),
+                    process_rbk_mir24(self, self.ui, True, channels=video_channels, force_crop=False),
                     self.loop
                 )
                 self.ui.update_rbk_mir24_status("Запущен (по расписанию)")
@@ -1028,6 +1077,16 @@ class MonitoringApp:
                     logger.info(f"Удалён устаревший файл: {file_path}")
                 except Exception as e:
                     logger.error(f"Ошибка при удалении {file_path}: {e}")
+
+    def _send_single_video_to_telegram(self, video_path, channel_name, found_keywords):
+        """Отправляет одно видео в Telegram."""
+        try:
+            from telegram_sender import send_files
+            caption = f"Канал: {channel_name}\nНайденные ключевые слова: {', '.join(found_keywords)}"
+            return send_files([str(video_path)], caption=caption)
+        except Exception as e:
+            logger.error(f"Ошибка при отправке видео {video_path}: {e}")
+            return False
 
 class StatusHandler(BaseHTTPRequestHandler):
     def __init__(self, ui_instance, *args, **kwargs):

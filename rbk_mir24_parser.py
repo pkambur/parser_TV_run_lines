@@ -111,49 +111,6 @@ async def validate_crop_params(channel_name, channel_info, resolution):
         logger.error(f"Ошибка валидации crop для {channel_name}: {e}")
         return ""
 
-async def record_video(channel_name, channel_info, process_list):
-    try:
-        logger.info(f"Подготовка записи для {channel_name}")
-        output_dir = base_dir / channel_name
-        output_dir.mkdir(parents=True, exist_ok=True)
-
-        timestamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
-        output_path = output_dir / f"{channel_name}_video_{timestamp}.mp4"
-
-        # Проверка доступности URL
-        if not await check_url_accessible(channel_info["url"]):
-            logger.error(f"Прерывание записи для {channel_name}: URL недоступен")
-            return
-
-        # Проверка разрешения видео
-        resolution = await check_video_resolution(channel_info["url"])
-        crop_filter = await validate_crop_params(channel_name, channel_info, resolution)
-
-        # Создаем задачу для записи видео
-        task = asyncio.create_task(
-            record_video_opencv(channel_name, channel_info["url"], output_path, crop_filter, VIDEO_DURATION)
-        )
-        process_list.append(task)
-
-        try:
-            await asyncio.wait_for(task, timeout=VIDEO_DURATION + 30)
-            if os.path.exists(output_path):
-                logger.info(f"Видео сохранено: {output_path}")
-            else:
-                logger.warning(f"Файл не был создан: {output_path}")
-        except asyncio.TimeoutError:
-            logger.error(f"Запись видео timed out для {channel_name}")
-            task.cancel()
-        except asyncio.CancelledError:
-            logger.info(f"Запись видео для {channel_name} отменена")
-            task.cancel()
-            raise
-        finally:
-            if task in process_list:
-                process_list.remove(task)
-    except Exception as e:
-        logger.error(f"Ошибка при записи {channel_name}: {e}")
-
 async def record_video_opencv(channel_name, stream_url, output_path, crop_params, duration):
     """Запись видео с использованием OpenCV."""
     try:
@@ -260,13 +217,14 @@ async def record_lines_video(channel_name, channel_info, duration=VIDEO_DURATION
         logger.error(f"Ошибка при записи crop-видео для {channel_name}: {e}")
 
 async def process_rbk_mir24(app, ui, send_files=False, channels=None, force_crop=False):
-    logger.info("Запуск записи видеопотоков (с учётом lines/schedule)")
+    logger.info("Запуск записи crop-видео (с учётом lines)")
     if ui.root.winfo_exists():
-        ui.update_status("Запуск записи...")
+        ui.update_status("Запуск записи crop-видео...")
         ui.update_rbk_mir24_status("Запущен")
 
     process_list = app.process_list
     record_tasks = []
+    recorded_videos = []  # Список для отслеживания записанных видео
 
     try:
         channels_data = load_channels()
@@ -301,24 +259,21 @@ async def process_rbk_mir24(app, ui, send_files=False, channels=None, force_crop
                 continue
             info = channels_data[name]
             lines_times = set(info.get("lines", []))
-            schedule_times = set(info.get("schedule", []))
 
             if force_crop:
-                logger.info(f"{name}: ручной запуск — всегда запись crop-ролика (lines_video)")
+                logger.info(f"{name}: ручной запуск — запись crop-ролика (lines_video)")
                 task = asyncio.create_task(record_lines_video(name, info, VIDEO_DURATION))
                 record_tasks.append(task)
+                recorded_videos.append({"channel": name, "type": "crop"})
             else:
-                # Если время есть и там, и там, то приоритет у schedule (т.е. пишем полный поток)
-                if now_str in schedule_times:
-                    logger.info(f"{name}: {now_str} найдено в schedule — запись полного потока (TV_video)")
-                    url = info.get("url")
-                    # Теперь ничего не делаем для schedule_times
-                elif now_str in lines_times:
+                # Записываем crop-видео только если время есть в lines
+                if now_str in lines_times:
                     logger.info(f"{name}: {now_str} найдено в lines — запись crop-ролика (lines_video)")
                     task = asyncio.create_task(record_lines_video(name, info, VIDEO_DURATION))
                     record_tasks.append(task)
+                    recorded_videos.append({"channel": name, "type": "crop"})
                 else:
-                    logger.info(f"{name}: {now_str} не найдено ни в lines, ни в schedule — пропуск")
+                    logger.info(f"{name}: {now_str} не найдено в lines — пропуск")
 
         if record_tasks:
             done, pending = await asyncio.wait(record_tasks, return_exceptions=True)
@@ -328,8 +283,10 @@ async def process_rbk_mir24(app, ui, send_files=False, channels=None, force_crop
                 elif hasattr(task, 'exception') and task.exception():
                     logger.error(f"Задача записи завершилась с ошибкой: {task.exception()}")
 
-        # После завершения записи crop-видео — запускаем распознавание и отправку видео
-        if hasattr(app, "check_and_send_videos"):
+        # После завершения записи — запускаем распознавание и отправку видео
+        # Проверяем, есть ли записанные видео для обработки
+        if recorded_videos and hasattr(app, "check_and_send_videos"):
+            logger.info(f"Запись завершена, найдено {len(recorded_videos)} crop-видео для обработки")
             def run_check_and_send():
                 try:
                     app.check_and_send_videos()
@@ -339,11 +296,15 @@ async def process_rbk_mir24(app, ui, send_files=False, channels=None, force_crop
                 app.ui.root.after(0, run_check_and_send)
             else:
                 run_check_and_send()
+        elif recorded_videos:
+            logger.info(f"Запись завершена, но функция check_and_send_videos недоступна. Записанные видео: {recorded_videos}")
+        else:
+            logger.info("Запись завершена, crop-видео для обработки не найдено")
 
         if ui.root.winfo_exists():
-            ui.update_status("Запись завершена")
+            ui.update_status("Запись crop-видео завершена")
             ui.update_rbk_mir24_status("Остановлен")
-        logger.info("Запись видеопотоков завершена")
+        logger.info("Запись crop-видео завершена")
 
     except asyncio.CancelledError:
         logger.info("Отмена всех задач записи")

@@ -18,10 +18,25 @@ logger = setup_logging('ui_log.txt')
 CHANNELS_FILE = Path('channels.json')
 def load_channels():
     try:
+        # Проверка существования файла channels.json
+        if not CHANNELS_FILE.exists():
+            error_msg = "Файл channels.json не найден. Каналы не загружены."
+            logger.error(error_msg)
+            return {}
+        
         with CHANNELS_FILE.open('r', encoding='utf-8') as f:
             return json.load(f)
+    except FileNotFoundError:
+        error_msg = "Файл channels.json не найден. Каналы не загружены."
+        logger.error(error_msg)
+        return {}
+    except json.JSONDecodeError as e:
+        error_msg = f"Ошибка в формате файла channels.json: {e}. Каналы не загружены."
+        logger.error(error_msg)
+        return {}
     except Exception as e:
-        logger.error(f"Ошибка при загрузке каналов: {e}")
+        error_msg = f"Ошибка при загрузке каналов: {e}"
+        logger.error(error_msg)
         return {}
 
 class MonitoringUI:
@@ -32,8 +47,17 @@ class MonitoringUI:
         self.root.geometry("1200x800")  # Увеличенный размер окна
         self.channels = load_channels()
         self.channel_names = list(self.channels.keys())
-        self.sidebar_visible = True
-        self.selected_channels = [self.channel_names[i % len(self.channel_names)] for i in range(4)]
+        
+        # Проверка на случай, когда каналы не загружены
+        if not self.channel_names:
+            error_msg = "Файл channels.json не найден или пуст. Приложение запущено без каналов."
+            logger.warning(error_msg)
+            messagebox.showwarning("Предупреждение", error_msg)
+            # Устанавливаем пустые значения по умолчанию
+            self.selected_channels = ["Нет каналов"] * 4
+        else:
+            self.selected_channels = [self.channel_names[i % len(self.channel_names)] for i in range(4)]
+        
         self.recording_status = {name: False for name in self.channel_names}
         self.video_labels = []
         self.comboboxes = []
@@ -42,6 +66,7 @@ class MonitoringUI:
         self.play_pause_buttons = []
         self.video_stream_active = [True]*4
         self.video_frames = []  # Will store the frames that have the border
+        self.sidebar_visible = True
         self.create_widgets()
         
     def create_widgets(self):
@@ -118,7 +143,7 @@ class MonitoringUI:
         self.start_rbk_mir24_button.pack(fill="x", pady=2)
         self.stop_rbk_mir24_button = ttk.Button(rbk_mir24_frame, text="Остановить запись", command=self.app.stop_rbk_mir24, state="disabled")
         self.stop_rbk_mir24_button.pack(fill="x", pady=2)
-        self.check_and_send_video_button = ttk.Button(rbk_mir24_frame, text="Проверить и отправить видео", command=self.app.check_and_send_videos)
+        self.check_and_send_video_button = ttk.Button(rbk_mir24_frame, text="Проверить и отправить crop-видео", command=self.app.check_and_send_videos)
         self.check_and_send_video_button.pack(fill="x", pady=2)
         self.video_check_status = ttk.Label(rbk_mir24_frame, text="Статус проверки: Ожидание")
         self.video_check_status.pack(fill="x", pady=5)
@@ -296,6 +321,25 @@ class MonitoringUI:
     def start_video_stream(self, idx):
         # Если поток неактивен, не запускаем его (вызывается из toggle)
         if not self.video_stream_active[idx]:
+            return
+        
+        # Проверка на случай, когда каналы не загружены
+        if not self.channel_names or self.selected_channels[idx] == "Нет каналов":
+            # Показываем сообщение о том, что каналы не загружены
+            label = self.video_labels[idx]
+            w = label.winfo_width()
+            h = label.winfo_height()
+            if w < 10 or h < 10: w, h = 400, 225
+            frame = np.full((h, w, 3), 64, dtype=np.uint8)  # Серый фон
+            text = "Каналы не загружены"
+            (text_width, text_height), _ = cv2.getTextSize(text, cv2.FONT_HERSHEY_SIMPLEX, 0.5, 1)
+            text_x = (w - text_width) // 2
+            text_y = (h + text_height) // 2
+            cv2.putText(frame, text, (text_x, text_y), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 1)
+            img = Image.fromarray(frame)
+            imgtk = ImageTk.PhotoImage(image=img)
+            label.imgtk = imgtk
+            label.configure(image=imgtk)
             return
         
         # Остановить предыдущий VideoCapture
@@ -507,9 +551,6 @@ class MonitoringUI:
         # --- Расписание ---
         schedule_frame = ttk.LabelFrame(settings_win, text="Расписание", padding=10)
         schedule_frame.pack(fill="x", padx=20, pady=5, expand=True)
-        tk.Label(schedule_frame, text="Время записи видео (schedule, через запятую или с новой строки):").pack(anchor="w")
-        schedule_text = tk.Text(schedule_frame, height=3)
-        schedule_text.pack(fill="x", pady=(0, 5))
         tk.Label(schedule_frame, text="Время мониторинга строк (lines, через запятую или с новой строки):").pack(anchor="w")
         lines_text = tk.Text(schedule_frame, height=3)
         lines_text.pack(fill="x")
@@ -524,8 +565,6 @@ class MonitoringUI:
                 default_duration_var.set(str(channels[ch].get('default_duration', '')))
                 specials = channels[ch].get('special_durations', {})
                 special_durations_var.set(', '.join(f"{k}={v}" for k, v in specials.items()) if specials else '')
-                schedule_text.delete('1.0', tk.END)
-                schedule_text.insert(tk.END, ', '.join(channels[ch].get('schedule', [])))
                 lines_text.delete('1.0', tk.END)
                 lines_text.insert(tk.END, ', '.join(channels[ch].get('lines', [])))
             else:
@@ -535,7 +574,6 @@ class MonitoringUI:
                 interval_var.set('')
                 default_duration_var.set('')
                 special_durations_var.set('')
-                schedule_text.delete('1.0', tk.END)
                 lines_text.delete('1.0', tk.END)
         channel_combo.bind("<<ComboboxSelected>>", fill_fields)
         channel_combo.bind("<KeyRelease>", fill_fields)
@@ -565,7 +603,6 @@ class MonitoringUI:
                 'url': url_var.get().strip(),
                 'crop': crop_var.get().strip(),
                 'interval': interval_var.get().strip(),
-                'schedule': parse_time_list(schedule_text),
                 'lines': parse_time_list(lines_text)
             }
             if default_duration_raw := default_duration_var.get().strip():
