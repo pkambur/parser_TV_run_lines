@@ -94,6 +94,16 @@ def process_image(image_path):
 
 async def send_to_telegram(excel_file, screenshot_files):
     try:
+        # Проверка существования директории processed_dir
+        if not processed_dir.exists():
+            logger.warning(f"Директория processed_dir не найдена: {processed_dir}")
+            # Создаем директорию если она не существует
+            try:
+                processed_dir.mkdir(parents=True, exist_ok=True)
+                logger.info(f"Создана директория processed_dir: {processed_dir}")
+            except Exception as e:
+                logger.error(f"Ошибка при создании директории processed_dir: {e}")
+        
         bot = Bot(token=TELEGRAM_TOKEN)
         sent_files = []  # Список для отслеживания успешно отправленных файлов
         available_chats = []  # Список доступных чатов

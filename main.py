@@ -529,7 +529,24 @@ class MonitoringApp:
     def _recognize_text_in_videos_to_channel_txt(self, video_dir):
         """Распознаёт текст из всех crop-видеофайлов и сохраняет результаты в отдельные txt по каналам."""
         recognized_dir = Path("recognized_text")
-        recognized_dir.mkdir(exist_ok=True)
+        
+        # Создание директории recognized_text если она не существует
+        try:
+            recognized_dir.mkdir(exist_ok=True)
+            logger.info(f"Директория recognized_text создана/проверена: {recognized_dir}")
+        except Exception as e:
+            logger.error(f"Ошибка при создании директории recognized_text: {e}")
+            return
+        
+        # Проверка существования и валидности video_dir
+        if not video_dir.exists():
+            logger.error(f"Директория video_dir не найдена: {video_dir}")
+            return
+        
+        if not video_dir.is_dir():
+            logger.error(f"Путь video_dir не является директорией: {video_dir}")
+            return
+        
         channel_files = {}
         for channel_dir in video_dir.iterdir():
             if not channel_dir.is_dir():
@@ -537,7 +554,11 @@ class MonitoringApp:
             channel_name = channel_dir.name
             txt_path = recognized_dir / f"{channel_name}.txt"
             if channel_name not in channel_files:
-                channel_files[channel_name] = open(txt_path, 'w', encoding='utf-8')
+                try:
+                    channel_files[channel_name] = open(txt_path, 'w', encoding='utf-8')
+                except Exception as e:
+                    logger.error(f"Ошибка при создании файла {txt_path}: {e}")
+                    continue
             txt_file = channel_files[channel_name]
             for video_file in channel_dir.glob("*.mp4"):
                 try:
@@ -566,35 +587,51 @@ class MonitoringApp:
                 except Exception as e:
                     logger.error(f"Ошибка при распознавании текста в {video_file}: {e}")
         for f in channel_files.values():
-            f.close()
+            try:
+                f.close()
+            except Exception as e:
+                logger.error(f"Ошибка при закрытии файла: {e}")
 
     def _get_videos_with_keywords_hf_channelwise(self):
         """Проверяет recognized_text/<channel>.txt на наличие ключевых слов и их вариаций через Hugging Face API."""
         recognized_dir = Path("recognized_text")
+        
+        # Проверка существования директории recognized_text
+        if not recognized_dir.exists():
+            logger.warning(f"Директория recognized_text не найдена: {recognized_dir}")
+            return []
+        
+        if not recognized_dir.is_dir():
+            logger.error(f"Путь recognized_text не является директорией: {recognized_dir}")
+            return []
+        
         keywords = list(self._load_keywords())
         videos_to_send = []
         
         for txt_path in recognized_dir.glob("*.txt"):
             channel_name = txt_path.stem
-            with open(txt_path, 'r', encoding='utf-8') as f:
-                for line in f:
-                    try:
-                        video_file, text = line.strip().split('\t', 1)
-                        found_keywords = self._find_keywords_hf(text, keywords)
-                        if found_keywords:
-                            # Ищем видео только в lines_video (crop видео)
-                            video_path = Path("lines_video") / channel_name / video_file
-                            
-                            if video_path.exists():
-                                videos_to_send.append({
-                                    'video_path': video_path,
-                                    'channel': channel_name,
-                                    'found_keywords': found_keywords
-                                })
-                            else:
-                                logger.warning(f"Crop-видео {video_file} не найдено в lines_video для канала {channel_name}")
-                    except Exception as e:
-                        logger.error(f"Ошибка при обработке строки recognized_text/{txt_path.name}: {e}")
+            try:
+                with open(txt_path, 'r', encoding='utf-8') as f:
+                    for line in f:
+                        try:
+                            video_file, text = line.strip().split('\t', 1)
+                            found_keywords = self._find_keywords_hf(text, keywords)
+                            if found_keywords:
+                                # Ищем видео только в lines_video (crop видео)
+                                video_path = Path("lines_video") / channel_name / video_file
+                                
+                                if video_path.exists():
+                                    videos_to_send.append({
+                                        'video_path': video_path,
+                                        'channel': channel_name,
+                                        'found_keywords': found_keywords
+                                    })
+                                else:
+                                    logger.warning(f"Crop-видео {video_file} не найдено в lines_video для канала {channel_name}")
+                        except Exception as e:
+                            logger.error(f"Ошибка при обработке строки recognized_text/{txt_path.name}: {e}")
+            except Exception as e:
+                logger.error(f"Ошибка при чтении файла {txt_path}: {e}")
         return videos_to_send
 
     def _remove_video_text_from_channel_txt(self, video_file_name, channel_name):
@@ -613,11 +650,22 @@ class MonitoringApp:
     def _cleanup_recognized_texts_channelwise(self):
         """Удаляет все recognized_text/<channel>.txt файлы."""
         recognized_dir = Path("recognized_text")
+        
+        # Проверка существования директории recognized_text
+        if not recognized_dir.exists():
+            logger.info(f"Директория recognized_text не существует, очистка не требуется: {recognized_dir}")
+            return
+        
+        if not recognized_dir.is_dir():
+            logger.error(f"Путь recognized_text не является директорией: {recognized_dir}")
+            return
+        
         for txt_path in recognized_dir.glob("*.txt"):
             try:
                 txt_path.unlink()
-            except Exception:
-                pass
+                logger.info(f"Удален файл: {txt_path}")
+            except Exception as e:
+                logger.error(f"Ошибка при удалении файла {txt_path}: {e}")
 
     def cleanup(self):
         """Очистка ресурсов при закрытии приложения."""
@@ -898,6 +946,13 @@ class MonitoringApp:
         """Использует Hugging Face Inference API (Qwen/Qwen2.5-VL-7B-Instruct) для поиска вариаций ключевых слов в тексте."""
         HF_API_URL = "https://api-inference.huggingface.co/models/Qwen/Qwen2.5-VL-7B-Instruct"
         HF_API_TOKEN = os.environ.get("HF_API_TOKEN")  # Токен должен быть в переменных окружения
+        
+        # Проверка существования токена HF_API_TOKEN
+        if not HF_API_TOKEN:
+            logger.warning("HF_API_TOKEN не найден в переменных окружения, используется локальная проверка")
+            # Возвращаем пустой список, так как без токена API недоступен
+            return []
+        
         headers = {"Authorization": f"Bearer {HF_API_TOKEN}"}
         found = []
         for kw in keywords:
@@ -932,15 +987,25 @@ class MonitoringApp:
         """Удаляет все видеофайлы из lines_video, если они остались."""
         # Очищаем lines_video
         lines_video_dir = Path("lines_video")
-        if lines_video_dir.exists():
-            for channel_dir in lines_video_dir.iterdir():
-                if not channel_dir.is_dir():
-                    continue
-                for video_file in channel_dir.glob("*.mp4"):
-                    try:
-                        video_file.unlink()
-                    except Exception:
-                        pass
+        
+        # Проверка существования директории lines_video
+        if not lines_video_dir.exists():
+            logger.info(f"Директория lines_video не существует, очистка не требуется: {lines_video_dir}")
+            return
+        
+        if not lines_video_dir.is_dir():
+            logger.error(f"Путь lines_video не является директорией: {lines_video_dir}")
+            return
+        
+        for channel_dir in lines_video_dir.iterdir():
+            if not channel_dir.is_dir():
+                continue
+            for video_file in channel_dir.glob("*.mp4"):
+                try:
+                    video_file.unlink()
+                    logger.info(f"Удален видеофайл: {video_file}")
+                except Exception as e:
+                    logger.error(f"Ошибка при удалении видеофайла {video_file}: {e}")
 
     def _start_r1_monitoring(self):
         """Запуск мониторинга строк для канала R1 по расписанию."""

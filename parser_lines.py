@@ -48,7 +48,15 @@ def capture_screenshot(channel_name, stream_url, output_dir, crop_params=None):
         # Формируем имя файла с текущей датой и временем
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
         output_dir = Path(output_dir)
-        output_dir.mkdir(parents=True, exist_ok=True)
+        
+        # Создание директории если она не существует
+        try:
+            output_dir.mkdir(parents=True, exist_ok=True)
+            logger.info(f"Директория для скриншотов создана/проверена: {output_dir}")
+        except Exception as e:
+            logger.error(f"Ошибка при создании директории для скриншотов: {e}")
+            return False
+        
         output_file = output_dir / f"{channel_name}_{timestamp}.jpg"
         
         # Открываем видеопоток
@@ -111,7 +119,12 @@ def monitor_channel(channel_name, channel_info):
 
         # Создаем директорию для скриншотов если её нет
         output_dir = Path('screenshots') / channel_name
-        output_dir.mkdir(parents=True, exist_ok=True)
+        try:
+            output_dir.mkdir(parents=True, exist_ok=True)
+            logger.info(f"Директория для канала {channel_name} создана/проверена: {output_dir}")
+        except Exception as e:
+            logger.error(f"Ошибка при создании директории для канала {channel_name}: {e}")
+            return
         
         # Получаем параметры обрезки и интервал
         crop_params = channel_info.get('crop')

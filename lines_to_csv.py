@@ -119,9 +119,15 @@ def is_readable_text(text: str, image_path: str) -> bool:
     Проверка читаемости текста. Сначала пытается использовать Hugging Face API,
     при недоступности API использует локальную проверку.
     """
+    # Проверка существования токена HF_TOKEN
+    hf_token = os.getenv('HF_TOKEN')
+    if not hf_token:
+        logger.warning("HF_TOKEN не найден в переменных окружения, используется локальная проверка")
+        return is_readable_text_local(text)
+    
     try:
         # Проверка через Hugging Face API
-        headers = {"Authorization": f"Bearer {os.getenv('HF_TOKEN')}"}
+        headers = {"Authorization": f"Bearer {hf_token}"}
         payload = {
             "inputs": [
                 {
@@ -192,6 +198,32 @@ def process_screenshots(screenshots_dir: str, processed_dir: str, daily_file_pat
     screenshots_dir = Path(screenshots_dir)
     processed_dir = Path(processed_dir)
     daily_file_path = Path(daily_file_path)
+    
+    # Проверка существования директории screenshots
+    if not screenshots_dir.exists():
+        logger.error(f"Директория screenshots не найдена: {screenshots_dir}")
+        return
+    
+    if not screenshots_dir.is_dir():
+        logger.error(f"Путь screenshots не является директорией: {screenshots_dir}")
+        return
+    
+    # Создание директории processed_dir если она не существует
+    try:
+        processed_dir.mkdir(parents=True, exist_ok=True)
+        logger.info(f"Директория processed_dir создана/проверена: {processed_dir}")
+    except Exception as e:
+        logger.error(f"Ошибка при создании директории processed_dir: {e}")
+        return
+    
+    # Создание родительской директории для daily_file_path если она не существует
+    try:
+        daily_file_path.parent.mkdir(parents=True, exist_ok=True)
+        logger.info(f"Родительская директория для daily_file_path создана/проверена: {daily_file_path.parent}")
+    except Exception as e:
+        logger.error(f"Ошибка при создании родительской директории для daily_file_path: {e}")
+        return
+    
     for channel_dir in screenshots_dir.iterdir():
         if not channel_dir.is_dir():
             continue
@@ -199,15 +231,22 @@ def process_screenshots(screenshots_dir: str, processed_dir: str, daily_file_pat
         if channel_dir.name in ['RBK', 'MIR24', 'TVC', 'NTV', 'RenTV']:
             continue
         processed_channel_dir = processed_dir / channel_dir.name
-        processed_channel_dir.mkdir(exist_ok=True)
+        try:
+            processed_channel_dir.mkdir(exist_ok=True)
+        except Exception as e:
+            logger.error(f"Ошибка при создании директории для канала {channel_dir.name}: {e}")
+            continue
         for image_file in channel_dir.iterdir():
             if not image_file.suffix.lower() in ['.png', '.jpg', '.jpeg']:
                 continue
             text, valid_image_path = process_file(str(image_file), keywords, duplicate_checker, str(daily_file_path))
             if text and valid_image_path:
                 new_path = processed_channel_dir / image_file.name
-                image_file.rename(new_path)
-                save_to_daily_file(channel_dir.name, text, str(new_path), str(daily_file_path))
+                try:
+                    image_file.rename(new_path)
+                    save_to_daily_file(channel_dir.name, text, str(new_path), str(daily_file_path))
+                except Exception as e:
+                    logger.error(f"Ошибка при перемещении файла {image_file}: {e}")
             else:
                 try:
                     image_file.unlink()

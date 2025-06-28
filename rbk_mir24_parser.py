@@ -197,8 +197,23 @@ async def record_video_opencv(channel_name, stream_url, output_path, crop_params
 async def record_lines_video(channel_name, channel_info, duration=VIDEO_DURATION):
     """Записывает crop-ролик в lines_video/<channel>/"""
     try:
+        # Проверка существования корневой директории lines_video
+        if not LINES_VIDEO_ROOT.exists():
+            try:
+                LINES_VIDEO_ROOT.mkdir(parents=True, exist_ok=True)
+                logger.info(f"Создана корневая директория lines_video: {LINES_VIDEO_ROOT}")
+            except Exception as e:
+                logger.error(f"Ошибка при создании корневой директории lines_video: {e}")
+                return
+        
         output_dir = LINES_VIDEO_ROOT / channel_name
-        output_dir.mkdir(parents=True, exist_ok=True)
+        try:
+            output_dir.mkdir(parents=True, exist_ok=True)
+            logger.info(f"Создана директория для канала {channel_name}: {output_dir}")
+        except Exception as e:
+            logger.error(f"Ошибка при создании директории для канала {channel_name}: {e}")
+            return
+        
         timestamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
         output_path = output_dir / f"{channel_name}_lines_{timestamp}.mp4"
 
