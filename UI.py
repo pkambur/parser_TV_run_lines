@@ -12,6 +12,7 @@ import shutil
 import datetime
 from pathlib import Path
 from config_manager import config_manager
+import re
 
 logger = setup_logging('ui_log.txt')
 
@@ -490,10 +491,9 @@ class MonitoringUI:
             logger.error(f"Ошибка при закрытии окна Tkinter: {e}")
 
     def open_settings_window(self):
-        import json
         settings_win = tk.Toplevel(self.root)
         settings_win.title("Настройки телеканалов")
-        settings_win.geometry("600x650") # Немного увеличим высоту
+        settings_win.geometry("600x700") # Увеличим высоту для сообщений об ошибках
         settings_win.transient(self.root)
         settings_win.grab_set()
 
@@ -552,6 +552,286 @@ class MonitoringUI:
         lines_text = tk.Text(schedule_frame, height=3)
         lines_text.pack(fill="x")
 
+        # --- Сообщения об ошибках ---
+        error_frame = ttk.LabelFrame(settings_win, text="Сообщения об ошибках", padding=10)
+        error_frame.pack(fill="x", padx=20, pady=5, expand=True)
+        error_label = tk.Label(error_frame, text="", fg="red", wraplength=550)
+        error_label.pack(fill="x")
+
+        def clear_error():
+            """Очищает сообщение об ошибке"""
+            error_label.config(text="")
+
+        def show_error(message):
+            """Показывает сообщение об ошибке с защитой от XSS"""
+            # Очищаем сообщение от потенциально опасных символов
+            safe_message = str(message)
+            
+            # Удаляем HTML-теги и специальные символы
+            safe_message = re.sub(r'<[^>]+>', '', safe_message)
+            safe_message = safe_message.replace('&', '&amp;')
+            safe_message = safe_message.replace('<', '&lt;')
+            safe_message = safe_message.replace('>', '&gt;')
+            safe_message = safe_message.replace('"', '&quot;')
+            safe_message = safe_message.replace("'", '&#x27;')
+            
+            # Ограничиваем длину сообщения
+            if len(safe_message) > 200:
+                safe_message = safe_message[:197] + "..."
+            
+            error_label.config(text=f"Ошибка: {safe_message}")
+            logger.warning(f"Ошибка валидации в настройках: {message}")
+
+        def validate_channel_name(name):
+            """Валидация названия канала"""
+            if not name or not name.strip():
+                return False, "Название канала не может быть пустым"
+            
+            name = name.strip()
+            
+            # Защита от DoS через очень длинные строки
+            if len(name) > 100:
+                return False, "Название канала слишком длинное (максимум 100 символов)"
+            
+            # Проверяем на недопустимые символы
+            invalid_chars = ['<', '>', ':', '"', '|', '?', '*', '\\', '/', '\0', '\t', '\n', '\r']
+            for char in invalid_chars:
+                if char in name:
+                    return False, f"Название канала содержит недопустимый символ: '{char}'"
+            
+            # Проверяем на попытки XSS
+            xss_patterns = [
+                r'<script', r'javascript:', r'on\w+\s*=', r'data:', r'vbscript:',
+                r'<iframe', r'<object', r'<embed', r'<form', r'<input'
+            ]
+            for pattern in xss_patterns:
+                if re.search(pattern, name, re.IGNORECASE):
+                    return False, "Название канала содержит недопустимые паттерны"
+            
+            return True, ""
+
+        def validate_url(url):
+            """Валидация URL"""
+            if not url or not url.strip():
+                return False, "URL не может быть пустым"
+            
+            url = url.strip()
+            
+            # Защита от DoS через очень длинные URL
+            if len(url) > 500:
+                return False, "URL слишком длинный (максимум 500 символов)"
+            
+            # Проверяем на попытки XSS в URL
+            xss_patterns = [
+                r'javascript:', r'data:', r'vbscript:', r'<script', r'<iframe',
+                r'on\w+\s*=', r'<object', r'<embed'
+            ]
+            for pattern in xss_patterns:
+                if re.search(pattern, url, re.IGNORECASE):
+                    return False, "URL содержит недопустимые паттерны"
+            
+            # Проверяем базовый формат URL
+            url_pattern = re.compile(
+                r'^https?://'  # http:// или https://
+                r'(?:(?:[A-Z0-9](?:[A-Z0-9-]{0,61}[A-Z0-9])?\.)+[A-Z]{2,6}\.?|'  # домен
+                r'localhost|'  # localhost
+                r'\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3})'  # IP адрес
+                r'(?::\d+)?'  # порт
+                r'(?:/?|[/?]\S+)$', re.IGNORECASE)
+            
+            if not url_pattern.match(url):
+                return False, "Неверный формат URL"
+            
+            return True, ""
+
+        def validate_crop(crop):
+            """Валидация параметров обрезки"""
+            if not crop or not crop.strip():
+                return True, ""  # Пустое значение допустимо
+            
+            crop = crop.strip()
+            if len(crop) > 100:
+                return False, "Параметры обрезки слишком длинные"
+            
+            # Формат: width:height:x:y (все числа)
+            crop_pattern = re.compile(r'^\d+:\d+:\d+:\d+$')
+            if not crop_pattern.match(crop):
+                return False, "Неверный формат обрезки. Используйте: ширина:высота:x:y"
+            
+            # Проверяем, что числа разумные
+            parts = crop.split(':')
+            width, height, x, y = map(int, parts)
+            
+            if width <= 0 or height <= 0:
+                return False, "Ширина и высота должны быть больше 0"
+            
+            if width > 10000 or height > 10000:
+                return False, "Размеры обрезки слишком большие (максимум 10000x10000)"
+            
+            if x < 0 or y < 0:
+                return False, "Координаты x и y должны быть неотрицательными"
+            
+            return True, ""
+
+        def validate_interval(interval):
+            """Валидация интервала"""
+            if not interval or not interval.strip():
+                return True, ""  # Пустое значение допустимо
+            
+            interval = interval.strip()
+            if len(interval) > 50:
+                return False, "Интервал слишком длинный"
+            
+            # Формат: число/число (например, 1/7)
+            interval_pattern = re.compile(r'^\d+/\d+$')
+            if not interval_pattern.match(interval):
+                return False, "Неверный формат интервала. Используйте: число/число"
+            
+            parts = interval.split('/')
+            numerator, denominator = map(int, parts)
+            
+            if numerator <= 0 or denominator <= 0:
+                return False, "Числа в интервале должны быть больше 0"
+            
+            if numerator > 1000 or denominator > 1000:
+                return False, "Числа в интервале слишком большие (максимум 1000)"
+            
+            return True, ""
+
+        def validate_default_duration(duration):
+            """Валидация длительности по умолчанию"""
+            if not duration or not duration.strip():
+                return True, ""  # Пустое значение допустимо
+            
+            duration = duration.strip()
+            if len(duration) > 10:
+                return False, "Длительность слишком длинная"
+            
+            try:
+                value = int(duration)
+                if value <= 0:
+                    return False, "Длительность должна быть больше 0"
+                if value > 1440:  # 24 часа в минутах
+                    return False, "Длительность слишком большая (максимум 1440 минут)"
+                return True, ""
+            except ValueError:
+                return False, "Длительность должна быть целым числом"
+
+        def validate_special_durations(specials):
+            """Валидация особых длительностей"""
+            if not specials or not specials.strip():
+                return True, ""  # Пустое значение допустимо
+            
+            specials = specials.strip()
+            if len(specials) > 500:
+                return False, "Особые длительности слишком длинные"
+            
+            # Формат: время=минуты, время=минуты
+            parts = [part.strip() for part in specials.split(',')]
+            
+            for part in parts:
+                if not part:
+                    continue
+                
+                if '=' not in part:
+                    return False, f"Неверный формат: '{part}'. Используйте: время=минуты"
+                
+                time_str, duration_str = part.split('=', 1)
+                time_str = time_str.strip()
+                duration_str = duration_str.strip()
+                
+                # Валидация времени (формат HH:MM)
+                time_pattern = re.compile(r'^([01]?[0-9]|2[0-3]):[0-5][0-9]$')
+                if not time_pattern.match(time_str):
+                    return False, f"Неверный формат времени: '{time_str}'. Используйте: HH:MM"
+                
+                # Валидация длительности
+                try:
+                    duration = int(duration_str)
+                    if duration <= 0:
+                        return False, f"Длительность должна быть больше 0: '{duration_str}'"
+                    if duration > 1440:
+                        return False, f"Длительность слишком большая: '{duration_str}' (максимум 1440 минут)"
+                except ValueError:
+                    return False, f"Длительность должна быть числом: '{duration_str}'"
+            
+            return True, ""
+
+        def validate_lines_schedule(lines_text_widget):
+            """Валидация расписания мониторинга строк"""
+            raw = lines_text_widget.get('1.0', tk.END).strip()
+            if not raw:
+                return True, ""  # Пустое значение допустимо
+            
+            if len(raw) > 1000:
+                return False, "Расписание слишком длинное"
+            
+            items = [item.strip() for part in raw.split('\n') for item in part.split(',')]
+            items = [item for item in items if item]
+            
+            for item in items:
+                # Проверяем формат времени HH:MM
+                time_pattern = re.compile(r'^([01]?[0-9]|2[0-3]):[0-5][0-9]$')
+                if not time_pattern.match(item):
+                    return False, f"Неверный формат времени: '{item}'. Используйте: HH:MM"
+            
+            return True, ""
+
+        def validate_all_fields():
+            """Валидация всех полей"""
+            clear_error()
+            
+            # Валидация названия канала
+            is_valid, error_msg = validate_channel_name(name_var.get())
+            if not is_valid:
+                show_error(error_msg)
+                name_entry.focus()
+                return False
+            
+            # Валидация URL
+            is_valid, error_msg = validate_url(url_var.get())
+            if not is_valid:
+                show_error(error_msg)
+                url_entry.focus()
+                return False
+            
+            # Валидация параметров обрезки
+            is_valid, error_msg = validate_crop(crop_var.get())
+            if not is_valid:
+                show_error(error_msg)
+                crop_entry.focus()
+                return False
+            
+            # Валидация интервала
+            is_valid, error_msg = validate_interval(interval_var.get())
+            if not is_valid:
+                show_error(error_msg)
+                interval_entry.focus()
+                return False
+            
+            # Валидация длительности по умолчанию
+            is_valid, error_msg = validate_default_duration(default_duration_var.get())
+            if not is_valid:
+                show_error(error_msg)
+                default_duration_entry.focus()
+                return False
+            
+            # Валидация особых длительностей
+            is_valid, error_msg = validate_special_durations(special_durations_var.get())
+            if not is_valid:
+                show_error(error_msg)
+                special_durations_entry.focus()
+                return False
+            
+            # Валидация расписания
+            is_valid, error_msg = validate_lines_schedule(lines_text)
+            if not is_valid:
+                show_error(error_msg)
+                lines_text.focus()
+                return False
+            
+            return True
+
         def fill_fields(event=None):
             ch = channel_var.get()
             if ch in channels:
@@ -572,29 +852,86 @@ class MonitoringUI:
                 default_duration_var.set('')
                 special_durations_var.set('')
                 lines_text.delete('1.0', tk.END)
+            clear_error()  # Очищаем ошибки при смене канала
+            
         channel_combo.bind("<<ComboboxSelected>>", fill_fields)
         channel_combo.bind("<KeyRelease>", fill_fields)
 
         def parse_time_list(text_widget):
+            """Безопасный парсинг списка времени с валидацией"""
             raw = text_widget.get('1.0', tk.END).strip()
-            if not raw: return []
-            items = [item.strip() for part in raw.split('\n') for item in part.split(',')]
-            return [item for item in items if item]
+            if not raw: 
+                return []
+            
+            # Ограничиваем длину входных данных
+            if len(raw) > 1000:
+                logger.warning("Слишком длинный список времени, обрезаем до 1000 символов")
+                raw = raw[:1000]
+            
+            # Разбиваем по строкам и запятым
+            items = []
+            for part in raw.split('\n'):
+                for item in part.split(','):
+                    item = item.strip()
+                    if item:
+                        # Дополнительная валидация каждого элемента
+                        if len(item) > 10:  # Максимальная длина времени HH:MM
+                            logger.warning(f"Слишком длинный элемент времени: {item}")
+                            continue
+                        
+                        # Проверяем, что элемент содержит только допустимые символы
+                        if not re.match(r'^[0-9:]+$', item):
+                            logger.warning(f"Недопустимые символы в времени: {item}")
+                            continue
+                        
+                        # Проверяем формат времени
+                        time_pattern = re.compile(r'^([01]?[0-9]|2[0-3]):[0-5][0-9]$')
+                        if time_pattern.match(item):
+                            items.append(item)
+                        else:
+                            logger.warning(f"Неверный формат времени: {item}")
+            
+            # Удаляем дубликаты, сохраняя порядок
+            seen = set()
+            unique_items = []
+            for item in items:
+                if item not in seen:
+                    seen.add(item)
+                    unique_items.append(item)
+            
+            return unique_items
 
         def save_channel():
-            ch_name = name_var.get().strip()
-            if not ch_name or not url_var.get().strip():
-                tk.messagebox.showerror("Ошибка", "Название и ссылка обязательны!")
+            # Валидация всех полей перед сохранением
+            if not validate_all_fields():
                 return
             
+            ch_name = name_var.get().strip()
+            
+            # Парсинг особых длительностей с дополнительной проверкой
             specials = {}
             if specials_raw := special_durations_var.get().strip():
                 for part in specials_raw.split(','):
                     if '=' in part:
                         k, v = part.split('=', 1)
+                        k = k.strip()
+                        v = v.strip()
                         try:
-                            specials[k.strip()] = int(v.strip())
-                        except ValueError: continue
+                            # Дополнительная проверка времени
+                            time_pattern = re.compile(r'^([01]?[0-9]|2[0-3]):[0-5][0-9]$')
+                            if not time_pattern.match(k):
+                                show_error(f"Неверный формат времени в особых длительностях: '{k}'")
+                                return
+                            
+                            duration = int(v)
+                            if duration <= 0 or duration > 1440:
+                                show_error(f"Неверная длительность в особых длительностях: '{v}'")
+                                return
+                            
+                            specials[k] = duration
+                        except ValueError:
+                            show_error(f"Неверная длительность в особых длительностях: '{v}'")
+                            return
             
             channel_data = {
                 'url': url_var.get().strip(),
@@ -602,10 +939,18 @@ class MonitoringUI:
                 'interval': interval_var.get().strip(),
                 'lines': parse_time_list(lines_text)
             }
+            
+            # Добавляем длительность по умолчанию, если она указана
             if default_duration_raw := default_duration_var.get().strip():
                 try:
-                    channel_data['default_duration'] = int(default_duration_raw)
-                except ValueError: pass
+                    duration = int(default_duration_raw)
+                    if duration > 0 and duration <= 1440:
+                        channel_data['default_duration'] = duration
+                except ValueError:
+                    show_error("Неверная длительность по умолчанию")
+                    return
+            
+            # Добавляем особые длительности, если они есть
             if specials:
                 channel_data['special_durations'] = specials
             
@@ -613,7 +958,7 @@ class MonitoringUI:
             
             # Используем config_manager для сохранения
             if config_manager.save_channels(channels):
-                logger.info("Каналы успешно сохранены в channels.json")
+                logger.info(f"Канал '{ch_name}' успешно сохранен в channels.json")
                 settings_win.destroy()
                 self.channels = channels
                 self.channel_names = list(channels.keys())
@@ -622,8 +967,33 @@ class MonitoringUI:
             else:
                 messagebox.showerror("Ошибка", "Не удалось сохранить channels.json. Проверьте права доступа к файлу.")
 
-        save_btn = tk.Button(settings_win, text="Сохранить", command=save_channel)
-        save_btn.pack(pady=15)
+        # Кнопки
+        button_frame = tk.Frame(settings_win)
+        button_frame.pack(pady=15)
+        
+        save_btn = tk.Button(button_frame, text="Сохранить", command=save_channel, bg="#4CAF50", fg="white")
+        save_btn.pack(side="left", padx=5)
+        
+        cancel_btn = tk.Button(button_frame, text="Отмена", command=settings_win.destroy, bg="#f44336", fg="white")
+        cancel_btn.pack(side="left", padx=5)
+        
+        # Привязываем валидацию к полям ввода
+        def on_field_change(*args):
+            """Вызывается при изменении любого поля для очистки ошибок"""
+            clear_error()
+        
+        name_var.trace('w', on_field_change)
+        url_var.trace('w', on_field_change)
+        crop_var.trace('w', on_field_change)
+        interval_var.trace('w', on_field_change)
+        default_duration_var.trace('w', on_field_change)
+        special_durations_var.trace('w', on_field_change)
+        
+        # Привязываем валидацию к текстовому полю
+        def on_text_change(event=None):
+            clear_error()
+        
+        lines_text.bind('<KeyRelease>', on_text_change)
 
     def _add_tooltip(self, widget, text):
         # Простой tooltip для Tkinter
