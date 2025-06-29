@@ -66,6 +66,7 @@ class MonitoringApp:
         self.start_time = time_module.time()
         self.last_lines_activity_time = self.start_time
         self.process_list = []
+        self.process_list_lock = threading.Lock()
         self.video_recognition_running = False
         self.loop = asyncio.new_event_loop()
         asyncio.set_event_loop(self.loop)
@@ -85,6 +86,7 @@ class MonitoringApp:
         
         # Кэш для результатов Hugging Face API
         self.hf_cache = {}
+        self.hf_cache_lock = threading.Lock()
         self.hf_cache_max_size = 1000  # Максимальное количество кэшированных результатов
 
     def start_status_server(self):
@@ -955,9 +957,10 @@ class MonitoringApp:
         cache_key = f"{hash(text)}:{hash(tuple(sorted(keywords)))}"
         
         # Проверяем кэш
-        if cache_key in self.hf_cache:
-            logger.debug("Используется кэшированный результат Hugging Face API")
-            return self.hf_cache[cache_key]
+        with self.hf_cache_lock:
+            if cache_key in self.hf_cache:
+                logger.debug("Используется кэшированный результат Hugging Face API")
+                return self.hf_cache[cache_key]
         
         # Используем более стабильную модель
         HF_API_URL = "https://api-inference.huggingface.co/models/microsoft/DialoGPT-medium"
@@ -1058,23 +1061,24 @@ Example responses:
         """
         Добавляет результат в кэш Hugging Face API с ограничением размера.
         """
-        # Если кэш переполнен, удаляем старые записи
-        if len(self.hf_cache) >= self.hf_cache_max_size:
-            # Удаляем 20% старых записей
-            keys_to_remove = list(self.hf_cache.keys())[:self.hf_cache_max_size // 5]
-            for key in keys_to_remove:
-                del self.hf_cache[key]
-            logger.debug(f"Очищен кэш Hugging Face API, удалено {len(keys_to_remove)} записей")
-        
-        self.hf_cache[cache_key] = result
-        logger.debug(f"Добавлен результат в кэш Hugging Face API, размер кэша: {len(self.hf_cache)}")
+        with self.hf_cache_lock:
+            # Если кэш переполнен, удаляем старые записи
+            if len(self.hf_cache) >= self.hf_cache_max_size:
+                # Удаляем 20% старых записей
+                keys_to_remove = list(self.hf_cache.keys())[:self.hf_cache_max_size // 5]
+                for key in keys_to_remove:
+                    del self.hf_cache[key]
+                logger.debug(f"Очищен кэш Hugging Face API, удалено {len(keys_to_remove)} записей")
+            self.hf_cache[cache_key] = result
+            logger.debug(f"Добавлен результат в кэш Hugging Face API, размер кэша: {len(self.hf_cache)}")
     
     def clear_hf_cache(self):
         """
         Очищает кэш Hugging Face API.
         """
-        self.hf_cache.clear()
-        logger.info("Кэш Hugging Face API очищен")
+        with self.hf_cache_lock:
+            self.hf_cache.clear()
+            logger.info("Кэш Hugging Face API очищен")
 
     def _start_r1_monitoring(self):
         """

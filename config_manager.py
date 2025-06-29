@@ -4,6 +4,7 @@ import os
 from pathlib import Path
 from typing import Dict, Any, Optional
 from datetime import datetime, timedelta
+import threading
 
 logger = logging.getLogger(__name__)
 
@@ -22,7 +23,7 @@ class ConfigManager:
         self._channels_last_modified: Optional[datetime] = None
         self._keywords_last_modified: Optional[datetime] = None
         self._cache_duration = timedelta(seconds=30)  # Кэш на 30 секунд
-        
+        self._lock = threading.Lock()
         # Пути к файлам конфигурации
         self.channels_file = Path('channels.json')
         self.keywords_file = Path('keywords.json')
@@ -44,11 +45,9 @@ class ConfigManager:
         """
         if last_modified is None:
             return False
-        
         current_mod_time = self._get_file_modification_time(file_path)
         if current_mod_time is None:
             return False
-        
         return (datetime.now() - last_modified) < self._cache_duration
     
     def load_channels(self, force_reload: bool = False) -> Dict[str, Any]:
@@ -61,18 +60,19 @@ class ConfigManager:
         Returns:
             Словарь с конфигурацией каналов
         """
-        # Проверяем кэш, если не требуется принудительная перезагрузка
-        if not force_reload and self._channels_cache is not None:
-            if self._is_cache_valid(self.channels_file, self._channels_last_modified):
-                logger.debug("Используется кэшированная конфигурация каналов")
-                return self._channels_cache
+        with self._lock:
+            if not force_reload and self._channels_cache is not None:
+                if self._is_cache_valid(self.channels_file, self._channels_last_modified):
+                    logger.debug("Используется кэшированная конфигурация каналов")
+                    return self._channels_cache
         
         # Проверка существования файла
         if not self.channels_file.exists():
             error_msg = "Файл channels.json не найден"
             logger.error(error_msg)
-            self._channels_cache = {}
-            self._channels_last_modified = None
+            with self._lock:
+                self._channels_cache = {}
+                self._channels_last_modified = None
             return {}
         
         try:
@@ -81,8 +81,9 @@ class ConfigManager:
                 channels = json.load(f)
             
             # Обновляем кэш
-            self._channels_cache = channels
-            self._channels_last_modified = self._get_file_modification_time(self.channels_file)
+            with self._lock:
+                self._channels_cache = channels
+                self._channels_last_modified = self._get_file_modification_time(self.channels_file)
             
             logger.info(f"Конфигурация каналов загружена: {len(channels)} каналов")
             return channels
@@ -90,20 +91,23 @@ class ConfigManager:
         except FileNotFoundError:
             error_msg = "Файл channels.json не найден"
             logger.error(error_msg)
-            self._channels_cache = {}
-            self._channels_last_modified = None
+            with self._lock:
+                self._channels_cache = {}
+                self._channels_last_modified = None
             return {}
         except json.JSONDecodeError as e:
             error_msg = f"Ошибка в формате файла channels.json: {e}"
             logger.error(error_msg)
-            self._channels_cache = {}
-            self._channels_last_modified = None
+            with self._lock:
+                self._channels_cache = {}
+                self._channels_last_modified = None
             return {}
         except Exception as e:
             error_msg = f"Ошибка при загрузке channels.json: {e}"
             logger.error(error_msg)
-            self._channels_cache = {}
-            self._channels_last_modified = None
+            with self._lock:
+                self._channels_cache = {}
+                self._channels_last_modified = None
             return {}
     
     def load_keywords(self, force_reload: bool = False) -> Dict[str, Any]:
@@ -116,18 +120,19 @@ class ConfigManager:
         Returns:
             Словарь с ключевыми словами
         """
-        # Проверяем кэш, если не требуется принудительная перезагрузка
-        if not force_reload and self._keywords_cache is not None:
-            if self._is_cache_valid(self.keywords_file, self._keywords_last_modified):
-                logger.debug("Используется кэшированный список ключевых слов")
-                return self._keywords_cache
+        with self._lock:
+            if not force_reload and self._keywords_cache is not None:
+                if self._is_cache_valid(self.keywords_file, self._keywords_last_modified):
+                    logger.debug("Используется кэшированный список ключевых слов")
+                    return self._keywords_cache
         
         # Проверка существования файла
         if not self.keywords_file.exists():
             error_msg = "Файл keywords.json не найден"
             logger.error(error_msg)
-            self._keywords_cache = {"keywords": []}
-            self._keywords_last_modified = None
+            with self._lock:
+                self._keywords_cache = {"keywords": []}
+                self._keywords_last_modified = None
             return {"keywords": []}
         
         try:
@@ -136,8 +141,9 @@ class ConfigManager:
                 keywords = json.load(f)
             
             # Обновляем кэш
-            self._keywords_cache = keywords
-            self._keywords_last_modified = self._get_file_modification_time(self.keywords_file)
+            with self._lock:
+                self._keywords_cache = keywords
+                self._keywords_last_modified = self._get_file_modification_time(self.keywords_file)
             
             logger.info(f"Ключевые слова загружены: {len(keywords.get('keywords', []))} слов")
             return keywords
@@ -145,20 +151,23 @@ class ConfigManager:
         except FileNotFoundError:
             error_msg = "Файл keywords.json не найден"
             logger.error(error_msg)
-            self._keywords_cache = {"keywords": []}
-            self._keywords_last_modified = None
+            with self._lock:
+                self._keywords_cache = {"keywords": []}
+                self._keywords_last_modified = None
             return {"keywords": []}
         except json.JSONDecodeError as e:
             error_msg = f"Ошибка в формате файла keywords.json: {e}"
             logger.error(error_msg)
-            self._keywords_cache = {"keywords": []}
-            self._keywords_last_modified = None
+            with self._lock:
+                self._keywords_cache = {"keywords": []}
+                self._keywords_last_modified = None
             return {"keywords": []}
         except Exception as e:
             error_msg = f"Ошибка при загрузке keywords.json: {e}"
             logger.error(error_msg)
-            self._keywords_cache = {"keywords": []}
-            self._keywords_last_modified = None
+            with self._lock:
+                self._keywords_cache = {"keywords": []}
+                self._keywords_last_modified = None
             return {"keywords": []}
     
     def get_channel_info(self, channel_name: str) -> Optional[Dict[str, Any]]:
@@ -217,8 +226,9 @@ class ConfigManager:
                 json.dump(channels, f, ensure_ascii=False, indent=2)
             
             # Обновляем кэш
-            self._channels_cache = channels
-            self._channels_last_modified = self._get_file_modification_time(self.channels_file)
+            with self._lock:
+                self._channels_cache = channels
+                self._channels_last_modified = self._get_file_modification_time(self.channels_file)
             
             logger.info("Конфигурация каналов успешно сохранена")
             return True
@@ -250,8 +260,9 @@ class ConfigManager:
                 json.dump(keywords, f, ensure_ascii=False, indent=2)
             
             # Обновляем кэш
-            self._keywords_cache = keywords
-            self._keywords_last_modified = self._get_file_modification_time(self.keywords_file)
+            with self._lock:
+                self._keywords_cache = keywords
+                self._keywords_last_modified = self._get_file_modification_time(self.keywords_file)
             
             logger.info("Ключевые слова успешно сохранены")
             return True
@@ -264,10 +275,11 @@ class ConfigManager:
         """
         Очищает кэш конфигурации.
         """
-        self._channels_cache = None
-        self._keywords_cache = None
-        self._channels_last_modified = None
-        self._keywords_last_modified = None
+        with self._lock:
+            self._channels_cache = None
+            self._keywords_cache = None
+            self._channels_last_modified = None
+            self._keywords_last_modified = None
         logger.info("Кэш конфигурации очищен")
     
     def reload_all(self):

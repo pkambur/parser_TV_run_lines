@@ -3,6 +3,7 @@ import logging
 import os
 import sys
 from functools import wraps
+import threading
 
 logger = logging.getLogger(__name__)
 
@@ -147,3 +148,6 @@ def start_runnable(func):
         return result
 
     return wrapper
+
+# Если в этом файле появятся общие структуры (например, кэш, глобальные переменные), использовать threading.Lock для thread-safe доступа.
+# Сейчас функции stateless, но если потребуется — добавить защиту.

@@ -14,7 +14,7 @@ import threading
 from typing import Optional, List, Dict, Any
 from tkinter import messagebox
 
-from parser_lines import main as start_lines_monitoring, stop_subprocesses, start_force_capture, stop_force_capture
+from parser_lines import main as start_lines_monitoring, stop_subprocesses, start_force_capture, stop_force_capture, force_capture_event, stop_monitoring_event
 
 logger = setup_logging('rbk_mir24_parser_log.txt')
 base_dir = Path("video").resolve()  # Абсолютный путь для надежности
@@ -125,22 +125,15 @@ async def record_video_opencv(channel_name, stream_url, output_path, crop_params
     Запись видео с использованием OpenCV.
     """
     try:
-        # Открываем видеопоток
         cap = cv2.VideoCapture(stream_url)
-        
         if not cap.isOpened():
             logger.error(f"Не удалось открыть видеопоток для {channel_name}: {stream_url}")
             return
-        
-        # Получаем параметры исходного видео
         fps = cap.get(cv2.CAP_PROP_FPS)
         if fps <= 0:
-            fps = 25.0  # Значение по умолчанию
-        
+            fps = 25.0
         width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
         height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
-        
-        # Применяем crop если указан
         if crop_params:
             try:
                 crop_str = crop_params.replace("crop=", "")
@@ -148,34 +141,25 @@ async def record_video_opencv(channel_name, stream_url, output_path, crop_params
                 width, height = crop_width, crop_height
             except Exception as e:
                 logger.error(f"Ошибка при парсинге crop для {channel_name}: {e}")
-        
-        # Создаем VideoWriter
         fourcc = cv2.VideoWriter_fourcc(*'mp4v')
         out = cv2.VideoWriter(output_path, fourcc, fps, (width, height))
-        
         if not out.isOpened():
             logger.error(f"Не удалось создать VideoWriter для {channel_name}")
             cap.release()
             return
-        
         start_time = asyncio.get_event_loop().time()
         frame_count = 0
-        
         logger.info(f"Начало записи видео для {channel_name}")
-        
         while True:
-            # Проверяем время записи
+            if stop_monitoring_event.is_set():
+                logger.info(f"Остановка записи видео для {channel_name} по флагу stop_monitoring_event")
+                break
             if asyncio.get_event_loop().time() - start_time >= duration:
                 break
-            
-            # Читаем кадр
             ret, frame = cap.read()
-            
             if not ret or frame is None:
                 logger.warning(f"Не удалось прочитать кадр {frame_count} для {channel_name}")
                 break
-            
-            # Применяем crop если указан
             if crop_params:
                 try:
                     crop_str = crop_params.replace("crop=", "")
@@ -183,20 +167,12 @@ async def record_video_opencv(channel_name, stream_url, output_path, crop_params
                     frame = frame[y:y+crop_height, x:x+crop_width]
                 except Exception as e:
                     logger.error(f"Ошибка при применении crop для кадра {frame_count} в {channel_name}: {e}")
-            
-            # Записываем кадр
             out.write(frame)
             frame_count += 1
-            
-            # Небольшая пауза для предотвращения блокировки
             await asyncio.sleep(0.001)
-        
-        # Освобождаем ресурсы
         cap.release()
         out.release()
-        
         logger.info(f"Запись завершена для {channel_name}: {frame_count} кадров")
-        
     except Exception as e:
         logger.error(f"Ошибка при записи видео для {channel_name}: {e}")
         try:
@@ -210,7 +186,6 @@ async def record_lines_video(channel_name, channel_info, duration=VIDEO_DURATION
     Записывает crop-ролик в lines_video/<channel>/.
     """
     try:
-        # Проверка существования корневой директории lines_video
         if not LINES_VIDEO_ROOT.exists():
             try:
                 LINES_VIDEO_ROOT.mkdir(parents=True, exist_ok=True)
@@ -218,7 +193,6 @@ async def record_lines_video(channel_name, channel_info, duration=VIDEO_DURATION
             except Exception as e:
                 logger.error(f"Ошибка при создании корневой директории lines_video: {e}")
                 return
-        
         output_dir = LINES_VIDEO_ROOT / channel_name
         try:
             output_dir.mkdir(parents=True, exist_ok=True)
@@ -226,19 +200,16 @@ async def record_lines_video(channel_name, channel_info, duration=VIDEO_DURATION
         except Exception as e:
             logger.error(f"Ошибка при создании директории для канала {channel_name}: {e}")
             return
-        
         timestamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
         output_path = output_dir / f"{channel_name}_lines_{timestamp}.mp4"
-
-        # Проверка доступности URL
         if not await check_url_accessible(channel_info["url"]):
             logger.error(f"Прерывание записи для {channel_name}: URL недоступен")
             return
-
-        # Проверка разрешения видео
         resolution = await check_video_resolution(channel_info["url"])
         crop_filter = await validate_crop_params(channel_name, channel_info, resolution)
-
+        if stop_monitoring_event.is_set():
+            logger.info(f"Остановка записи crop-видео для {channel_name} по флагу stop_monitoring_event")
+            return
         await record_video_opencv(channel_name, channel_info["url"], output_path, crop_filter, duration)
         logger.info(f"Crop-видео для {channel_name} сохранено: {output_path}")
     except Exception as e:
@@ -252,11 +223,9 @@ async def process_rbk_mir24(app, ui, send_files=False, channels=None, force_crop
     if ui.root.winfo_exists():
         ui.update_status("Запуск записи crop-видео...")
         ui.update_rbk_mir24_status("Запущен")
-
     process_list = app.process_list
     record_tasks = []
-    recorded_videos = []  # Список для отслеживания записанных видео
-
+    recorded_videos = []
     try:
         channels_data = load_channels()
         if not channels_data:
@@ -265,7 +234,6 @@ async def process_rbk_mir24(app, ui, send_files=False, channels=None, force_crop
                 ui.update_status("Ошибка: Не удалось загрузить channels.json")
                 ui.update_rbk_mir24_status("Ошибка")
             return
-
         video_channels = ['RBK', 'MIR24', 'RenTV', 'NTV', 'TVC']
         if channels is None:
             channels = video_channels
@@ -277,11 +245,12 @@ async def process_rbk_mir24(app, ui, send_files=False, channels=None, force_crop
                     ui.update_status("Нет каналов для записи видео")
                     ui.update_rbk_mir24_status("Ошибка")
                 return
-
         now_str = get_current_time_str()
         logger.info(f"Текущее время: {now_str}")
-
         for name in channels:
+            if stop_monitoring_event.is_set():
+                logger.info(f"Остановка записи crop-видео по флагу stop_monitoring_event (канал {name})")
+                break
             if name not in channels_data:
                 logger.warning(f"Канал {name} отсутствует в channels.json")
                 if ui.root.winfo_exists():
@@ -290,14 +259,12 @@ async def process_rbk_mir24(app, ui, send_files=False, channels=None, force_crop
                 continue
             info = channels_data[name]
             lines_times = set(info.get("lines", []))
-
             if force_crop:
                 logger.info(f"{name}: ручной запуск — запись crop-ролика (lines_video)")
                 task = asyncio.create_task(record_lines_video(name, info, VIDEO_DURATION))
                 record_tasks.append(task)
                 recorded_videos.append({"channel": name, "type": "crop"})
             else:
-                # Записываем crop-видео только если время есть в lines
                 if now_str in lines_times:
                     logger.info(f"{name}: {now_str} найдено в lines — запись crop-ролика (lines_video)")
                     task = asyncio.create_task(record_lines_video(name, info, VIDEO_DURATION))
@@ -305,7 +272,6 @@ async def process_rbk_mir24(app, ui, send_files=False, channels=None, force_crop
                     recorded_videos.append({"channel": name, "type": "crop"})
                 else:
                     logger.info(f"{name}: {now_str} не найдено в lines — пропуск")
-
         if record_tasks:
             done, pending = await asyncio.wait(record_tasks, return_exceptions=True)
             for task in done:
@@ -313,9 +279,6 @@ async def process_rbk_mir24(app, ui, send_files=False, channels=None, force_crop
                     logger.error(f"Задача записи завершилась с ошибкой: {task}")
                 elif hasattr(task, 'exception') and task.exception():
                     logger.error(f"Задача записи завершилась с ошибкой: {task.exception()}")
-
-        # После завершения записи — запускаем распознавание и отправку видео
-        # Проверяем, есть ли записанные видео для обработки
         if recorded_videos and hasattr(app, "check_and_send_videos"):
             logger.info(f"Запись завершена, найдено {len(recorded_videos)} crop-видео для обработки")
             def run_check_and_send():
@@ -331,12 +294,10 @@ async def process_rbk_mir24(app, ui, send_files=False, channels=None, force_crop
             logger.info(f"Запись завершена, но функция check_and_send_videos недоступна. Записанные видео: {recorded_videos}")
         else:
             logger.info("Запись завершена, crop-видео для обработки не найдено")
-
         if ui.root.winfo_exists():
             ui.update_status("Запись crop-видео завершена")
             ui.update_rbk_mir24_status("Остановлен")
         logger.info("Запись crop-видео завершена")
-
     except asyncio.CancelledError:
         logger.info("Отмена всех задач записи")
         for task in record_tasks:
@@ -347,7 +308,6 @@ async def process_rbk_mir24(app, ui, send_files=False, channels=None, force_crop
             ui.update_status("Запись остановлена")
             ui.update_rbk_mir24_status("Остановлен")
         raise
-
     except Exception as e:
         logger.error(f"Ошибка в process_rbk_mir24: {e}")
         if ui.root.winfo_exists():

@@ -15,6 +15,7 @@ from typing import List, Tuple, Optional
 import numpy as np
 from collections import Counter
 from config_manager import config_manager
+import threading
 
 # Настройка логирования
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
@@ -30,24 +31,27 @@ class TextDuplicateChecker:
         """
         self.previous_texts: List[str] = []
         self.similarity_threshold = similarity_threshold
+        self._lock = threading.Lock()
 
     def is_duplicate(self, text: str, compare_texts: List[str]) -> bool:
         """
         Проверяет, является ли текст дубликатом среди compare_texts.
         """
-        for prev_text in compare_texts:
-            if not prev_text or not text:
-                continue
-            similarity = SequenceMatcher(None, text.lower(), prev_text.lower()).ratio()
-            if similarity > self.similarity_threshold:
-                return True
+        with self._lock:
+            for prev_text in compare_texts:
+                if not prev_text or not text:
+                    continue
+                similarity = SequenceMatcher(None, text.lower(), prev_text.lower()).ratio()
+                if similarity > self.similarity_threshold:
+                    return True
         return False
 
     def add_text(self, text: str):
         """
         Добавляет текст в историю для последующей проверки.
         """
-        self.previous_texts.append(text)
+        with self._lock:
+            self.previous_texts.append(text)
 
 def load_keywords() -> List[str]:
     """

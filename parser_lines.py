@@ -16,8 +16,8 @@ logger = setup_logging('parser_lines_log.txt')
 
 # Глобальные переменные для управления мониторингом
 monitoring_threads = []
-force_capture = False
-stop_monitoring = False
+force_capture_event = threading.Event()
+stop_monitoring_event = threading.Event()
 
 def load_channels():
     """
@@ -113,7 +113,6 @@ def monitor_channel(channel_name, channel_info):
     """
     Мониторинг отдельного канала.
     """
-    global force_capture, stop_monitoring
     try:
         # Получаем URL потока из конфигурации
         stream_url = channel_info.get('url')
@@ -138,12 +137,12 @@ def monitor_channel(channel_name, channel_info):
         
         last_capture_time = None
         
-        while not stop_monitoring:
+        while not stop_monitoring_event.is_set():
             try:
                 current_time = time.time()
                 
                 # Проверяем флаг принудительного захвата или прошло достаточно времени
-                if force_capture or (last_capture_time is None or current_time - last_capture_time >= interval):
+                if force_capture_event.is_set() or (last_capture_time is None or current_time - last_capture_time >= interval):
                     # Создаем скриншот
                     result = capture_screenshot(channel_name, stream_url, output_dir, crop_params)
                     if result:
@@ -153,18 +152,18 @@ def monitor_channel(channel_name, channel_info):
                         logger.error(f"Не удалось создать скриншот для {channel_name}")
                     
                     # Сбрасываем флаг принудительного захвата
-                    if force_capture:
-                        force_capture = False
+                    if force_capture_event.is_set():
+                        force_capture_event.clear()
                 
                 # Проверяем флаг остановки каждую секунду
                 time.sleep(1)
                 
             except Exception as e:
                 logger.error(f"Ошибка в цикле мониторинга канала {channel_name}: {e}")
-                if stop_monitoring:
+                if stop_monitoring_event.is_set():
                     break
                 time.sleep(5)  # Пауза перед повторной попыткой
-                
+        
     except Exception as e:
         logger.error(f"Критическая ошибка при мониторинге канала {channel_name}: {e}")
     finally:
@@ -174,24 +173,21 @@ def start_force_capture():
     """
     Запускает принудительный захват скриншотов для всех каналов.
     """
-    global force_capture
-    force_capture = True
+    force_capture_event.set()
     logger.info("Запущен принудительный захват скриншотов")
 
 def stop_force_capture():
     """
     Останавливает принудительный захват скриншотов.
     """
-    global force_capture
-    force_capture = False
+    force_capture_event.clear()
     logger.info("Остановлен принудительный захват скриншотов")
 
 def stop_subprocesses():
     """
     Останавливает все потоки мониторинга.
     """
-    global stop_monitoring
-    stop_monitoring = True
+    stop_monitoring_event.set()
     logger.info("Остановка всех потоков мониторинга")
     
     # Ждем завершения всех потоков
@@ -206,7 +202,7 @@ def stop_subprocesses():
     monitoring_threads.clear()
     
     # Сбрасываем флаг остановки
-    stop_monitoring = False
+    stop_monitoring_event.clear()
     logger.info("Все потоки мониторинга остановлены")
 
 def main():
