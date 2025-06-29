@@ -163,7 +163,7 @@ def monitor_channel(channel_name, channel_info):
                 if stop_monitoring_event.is_set():
                     break
                 time.sleep(5)  # Пауза перед повторной попыткой
-        
+        logger.info(f"ВЫХОД из цикла мониторинга канала {channel_name} (stop_monitoring_event.is_set={stop_monitoring_event.is_set()})")
     except Exception as e:
         logger.error(f"Критическая ошибка при мониторинге канала {channel_name}: {e}")
     finally:
@@ -189,18 +189,22 @@ def stop_subprocesses():
     """
     stop_monitoring_event.set()
     logger.info("Остановка всех потоков мониторинга")
-    
-    # Ждем завершения всех потоков
+    logger.info(f"Всего потоков для join: {len(monitoring_threads)}")
     for thread in monitoring_threads:
+        logger.info(f"Ожидание завершения потока: {thread.name}, is_alive={thread.is_alive()}")
         if thread.is_alive():
             try:
                 thread.join(timeout=5.0)
+                if thread.is_alive():
+                    logger.warning(f"Поток {thread.name} не завершился за timeout! Возможно, он завис.")
+                else:
+                    logger.info(f"Поток {thread.name} успешно завершён.")
             except Exception as e:
                 logger.error(f"Ошибка при остановке потока {thread.name}: {e}")
-    
+        else:
+            logger.info(f"Поток {thread.name} уже завершён.")
     # Очищаем список потоков
     monitoring_threads.clear()
-    
     # Сбрасываем флаг остановки
     stop_monitoring_event.clear()
     logger.info("Все потоки мониторинга остановлены")

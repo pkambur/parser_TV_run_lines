@@ -528,7 +528,6 @@ class MonitoringApp:
                     frame_count = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
                     fps = cap.get(cv2.CAP_PROP_FPS)
                     step = int(fps * 2) if fps > 0 else 50  # Кадр каждые 2 секунды
-                    recognized_texts = []
                     frame_idx = 0
                     while True:
                         ret, frame = cap.read()
@@ -537,12 +536,12 @@ class MonitoringApp:
                         if frame_idx % step == 0:
                             gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
                             text = pytesseract.image_to_string(gray, lang='rus+eng')
-                            recognized_texts.append(text.replace('\n', ' '))
+                            timestamp_sec = int(frame_idx / fps) if fps > 0 else frame_idx
+                            # Сохраняем: имя_файла\tномер_кадра\tсекунда\tтекст
+                            txt_file.write(f"{video_file.name}\t{frame_idx}\t{timestamp_sec}\t{text.replace('\n', ' ').strip()}\n")
                         frame_idx += 1
                     cap.release()
-                    all_text = ' '.join(recognized_texts).replace('\n', ' ')
-                    txt_file.write(f"{video_file.name}\t{all_text}\n")
-                    logger.info(f"Распознан текст для {video_file.name}")
+                    logger.info(f"Распознан текст по кадрам для {video_file.name}")
                 except Exception as e:
                     logger.error(f"Ошибка при распознавании текста в {video_file}: {e}")
         for f in channel_files.values():
@@ -1153,31 +1152,173 @@ Example responses:
         except Exception as e:
             logger.error(f"Ошибка при очистке устаревших файлов sent_texts: {e}")
 
+    def get_video_fragments_with_keywords(self, video_path, channel_name, keywords, context_sec=2):
+        """
+        По файлу recognized_text/<channel>.txt и списку ключевых слов возвращает интервалы (start_sec, end_sec)
+        для нарезки видео (±context_sec вокруг каждого найденного предложения).
+        """
+        recognized_file = Path("recognized_text") / f"{channel_name}.txt"
+        if not recognized_file.exists():
+            logger.warning(f"Файл распознанного текста не найден: {recognized_file}")
+            return []
+        fragments = []
+        video_name = video_path.name
+        # Собираем все строки для этого видео
+        with open(recognized_file, 'r', encoding='utf-8') as f:
+            lines = [line.strip() for line in f if line.startswith(video_name + '\t')]
+        for line in lines:
+            try:
+                parts = line.split('\t', 3)
+                if len(parts) < 4:
+                    continue
+                _, _, timestamp_sec, text = parts
+                timestamp_sec = int(timestamp_sec)
+                found = self._find_keywords_local(text, keywords)
+                if found:
+                    start = max(0, timestamp_sec - context_sec)
+                    end = timestamp_sec + context_sec
+                    fragments.append((start, end))
+            except Exception as e:
+                logger.error(f"Ошибка при парсинге строки распознанного текста: {e}")
+        # Объединяем пересекающиеся интервалы
+        if not fragments:
+            return []
+        fragments.sort()
+        merged = [fragments[0]]
+        for start, end in fragments[1:]:
+            last_start, last_end = merged[-1]
+            if start <= last_end:
+                merged[-1] = (last_start, max(last_end, end))
+            else:
+                merged.append((start, end))
+        return merged
+
+    def cut_and_concat_video_fragments_ffmpeg(self, video_path, fragments, output_path):
+        """
+        Нарезает и склеивает фрагменты видео через ffmpeg. fragments — список (start_sec, end_sec).
+        Возвращает True при успехе.
+        """
+        import tempfile
+        import subprocess
+        import os
+        temp_dir = tempfile.mkdtemp()
+        temp_files = []
+        try:
+            for idx, (start, end) in enumerate(fragments):
+                temp_file = os.path.join(temp_dir, f"frag_{idx}.mp4")
+                duration = end - start
+                cmd = [
+                    "ffmpeg", "-y", "-i", str(video_path),
+                    "-ss", str(start), "-t", str(duration),
+                    "-c", "copy", temp_file
+                ]
+                result = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+                if result.returncode != 0:
+                    logger.error(f"Ошибка ffmpeg при нарезке: {result.stderr.decode()}")
+                    continue
+                temp_files.append(temp_file)
+            if not temp_files:
+                logger.warning("Нет нарезанных фрагментов для склейки")
+                return False
+            # Создаем файл со списком для ffmpeg
+            concat_list = os.path.join(temp_dir, "concat_list.txt")
+            with open(concat_list, 'w', encoding='utf-8') as f:
+                for temp_file in temp_files:
+                    f.write(f"file '{temp_file}'\n")
+            # Склеиваем
+            cmd_concat = [
+                "ffmpeg", "-y", "-f", "concat", "-safe", "0", "-i", concat_list,
+                "-c", "copy", str(output_path)
+            ]
+            result = subprocess.run(cmd_concat, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+            if result.returncode != 0:
+                logger.error(f"Ошибка ffmpeg при склейке: {result.stderr.decode()}")
+                return False
+            return True
+        finally:
+            # Удаляем временные файлы
+            for temp_file in temp_files:
+                try:
+                    os.remove(temp_file)
+                except Exception:
+                    pass
+            try:
+                os.remove(os.path.join(temp_dir, "concat_list.txt"))
+            except Exception:
+                pass
+            try:
+                os.rmdir(temp_dir)
+            except Exception:
+                pass
+
     def _send_single_video_to_telegram(self, video_path, channel_name, found_keywords):
         """
-        Отправляет одно видео в Telegram.
+        Отправляет одно видео в Telegram. Если есть ключевые слова — отправляет видео целиком.
+        Не отправляет видео, если оно уже было отправлено (sent_videos.txt) или неудачно отправлено (failed_videos.txt).
+        После двух неудачных попыток отправки — добавляет в failed_videos.txt и очищает папку, как при успехе.
         """
         try:
             from telegram_sender import send_files
-            caption = f"Канал: {channel_name}\nНайденные ключевые слова: {', '.join(found_keywords)}"
-            
-            # Проверяем размер файла перед отправкой
-            file_size = video_path.stat().st_size
-            file_size_mb = file_size / (1024 * 1024)
-            logger.info(f"Отправка видео {video_path.name} ({file_size_mb:.2f} MB) в Telegram")
-            
-            success = send_files([str(video_path)], caption=caption)
-            
-            if success:
-                logger.info(f"Видео {video_path.name} успешно отправлено в Telegram")
-                return True
-            else:
-                logger.error(f"Не удалось отправить видео {video_path.name} в Telegram (функция send_files вернула False)")
+            sent_videos_file = Path('sent_videos.txt')
+            failed_videos_file = Path('failed_videos.txt')
+            sent_videos = set()
+            failed_videos = set()
+            if sent_videos_file.exists():
+                with sent_videos_file.open('r', encoding='utf-8') as f:
+                    sent_videos = set(line.strip() for line in f if line.strip())
+            if failed_videos_file.exists():
+                with failed_videos_file.open('r', encoding='utf-8') as f:
+                    failed_videos = set(line.strip() for line in f if line.strip())
+            video_name = os.path.basename(str(video_path))
+            if video_name in sent_videos or video_name in failed_videos:
+                logger.info(f"Видео {video_name} уже было отправлено ранее или неудачно отправлено, пропуск отправки.")
                 return False
-                
+            if found_keywords:
+                caption = f"Канал: {channel_name}\nНайденные ключевые слова: {', '.join(found_keywords)}"
+                file_to_send = str(video_path)
+            else:
+                logger.info(f"Нет ключевых слов для {video_path.name}, видео не отправляется")
+                return False
+            file_size = os.path.getsize(file_to_send)
+            file_size_mb = file_size / (1024 * 1024)
+            logger.info(f"Отправка видео {os.path.basename(file_to_send)} ({file_size_mb:.2f} MB) в Telegram")
+            max_attempts = 2
+            for attempt in range(max_attempts):
+                success = send_files([file_to_send], caption=caption)
+                if success:
+                    logger.info(f"Видео {os.path.basename(file_to_send)} успешно отправлено в Telegram")
+                    with sent_videos_file.open('a', encoding='utf-8') as f:
+                        f.write(video_name + '\n')
+                    # Очистка папки после успешной отправки
+                    self._cleanup_channel_video_folder(channel_name)
+                    return True
+                else:
+                    logger.error(f"Не удалось отправить видео {os.path.basename(file_to_send)} в Telegram (попытка {attempt+1})")
+            # После двух неудачных попыток
+            logger.error(f"Видео {os.path.basename(file_to_send)} не удалось отправить после {max_attempts} попыток. Помещаем в failed_videos.txt и очищаем папку.")
+            with failed_videos_file.open('a', encoding='utf-8') as f:
+                f.write(video_name + '\n')
+            self._cleanup_channel_video_folder(channel_name)
+            return False
         except Exception as e:
             logger.error(f"Ошибка при отправке видео {video_path}: {e}")
             return False
+
+    def _cleanup_channel_video_folder(self, channel_name):
+        """
+        Очищает папку lines_video/<channel_name> (удаляет все mp4-файлы).
+        """
+        try:
+            channel_dir = Path("lines_video") / channel_name
+            if channel_dir.exists() and channel_dir.is_dir():
+                for file in channel_dir.glob("*.mp4"):
+                    try:
+                        file.unlink()
+                        logger.info(f"Удалён файл {file} из папки {channel_dir}")
+                    except Exception as e:
+                        logger.error(f"Ошибка при удалении файла {file}: {e}")
+        except Exception as e:
+            logger.error(f"Ошибка при очистке папки lines_video/{channel_name}: {e}")
 
 class StatusHandler(BaseHTTPRequestHandler):
     """

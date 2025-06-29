@@ -154,204 +154,48 @@ except Exception as e:
 
 def compress_video(input_path, output_path=None, target_size_mb=45):
     """
-    Сжимает видео для соответствия лимитам Telegram.
-    Возвращает путь к сжатому файлу или None в случае ошибки.
+    Легкое сжатие видео: перекодировка, fps=15, не уменьшать разрешение.
+    Не пытаться сжимать до 10-20 МБ, только перекодировать для совместимости с Telegram.
     """
     try:
         if output_path is None:
-            # Создаем временный файл
             temp_dir = tempfile.gettempdir()
             output_path = os.path.join(temp_dir, f"compressed_{os.path.basename(input_path)}")
-        
-        # Открываем исходное видео
         cap = cv2.VideoCapture(input_path)
         if not cap.isOpened():
             logger.error(f"Не удалось открыть видео для сжатия: {input_path}")
             return None
-        
-        # Получаем параметры исходного видео
         fps = cap.get(cv2.CAP_PROP_FPS)
         width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
         height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
-        total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
-        
-        # Более агрессивное сжатие для crop-видео
-        # Для crop-видео (бегущие строки) можно использовать меньшие размеры
-        max_width, max_height = 800, 450  # Уменьшаем максимальные размеры еще больше
-        
-        # Вычисляем новые размеры с более агрессивным сжатием
-        if width > max_width or height > max_height:
-            ratio = min(max_width / width, max_height / height)
-            new_width = int(width * ratio)
-            new_height = int(height * ratio)
-        else:
-            # Если размеры уже небольшие, уменьшаем их еще больше
-            new_width = int(width * 0.7)
-            new_height = int(height * 0.7)
-        
-        # Убеждаемся, что размеры четные (требование для некоторых кодеков)
-        new_width = new_width if new_width % 2 == 0 else new_width - 1
-        new_height = new_height if new_height % 2 == 0 else new_height - 1
-        
-        # Убеждаемся, что размеры не меньше минимальных
-        new_width = max(new_width, 320)
-        new_height = max(new_height, 180)
-        
-        # Уменьшаем FPS для экономии места
-        new_fps = min(fps, 15)  # Максимум 15 FPS
-        
-        # Используем более эффективный кодек H.264
+        new_fps = min(fps, 15) if fps > 0 else 15
         fourcc = cv2.VideoWriter_fourcc(*'H264')
-        out = cv2.VideoWriter(output_path, fourcc, new_fps, (new_width, new_height))
-        
+        out = cv2.VideoWriter(output_path, fourcc, new_fps, (width, height))
         if not out.isOpened():
-            # Если H.264 не поддерживается, используем MP4V
             logger.warning("H.264 не поддерживается, используем MP4V")
             fourcc = cv2.VideoWriter_fourcc(*'mp4v')
-            out = cv2.VideoWriter(output_path, fourcc, new_fps, (new_width, new_height))
-            
+            out = cv2.VideoWriter(output_path, fourcc, new_fps, (width, height))
             if not out.isOpened():
                 logger.error(f"Не удалось создать VideoWriter для сжатия: {output_path}")
                 cap.release()
                 return None
-        
-        logger.info(f"Начало сжатия видео: {input_path} -> {output_path}")
-        logger.info(f"Исходные размеры: {width}x{height}, новые: {new_width}x{new_height}")
-        logger.info(f"Исходный FPS: {fps}, новый: {new_fps}")
-        
         frame_count = 0
-        frame_skip = max(1, int(fps / new_fps))  # Пропускаем кадры для снижения FPS
-        
+        frame_skip = max(1, int(fps / new_fps)) if fps > 0 else 1
         while True:
             ret, frame = cap.read()
             if not ret:
                 break
-            
-            # Пропускаем кадры для снижения FPS
             if frame_count % frame_skip == 0:
-                # Изменяем размер кадра
-                if new_width != width or new_height != height:
-                    frame = cv2.resize(frame, (new_width, new_height), interpolation=cv2.INTER_AREA)
-                
-                # Записываем кадр
                 out.write(frame)
-            
             frame_count += 1
-            
-            # Показываем прогресс каждые 100 кадров
-            if frame_count % 100 == 0:
-                progress = (frame_count / total_frames) * 100
-                logger.info(f"Прогресс сжатия: {progress:.1f}% ({frame_count}/{total_frames})")
-        
-        # Освобождаем ресурсы
         cap.release()
         out.release()
-        
-        # Проверяем размер сжатого файла
         compressed_size = os.path.getsize(output_path)
         compressed_size_mb = compressed_size / (1024 * 1024)
-        
         logger.info(f"Сжатие завершено: {compressed_size_mb:.2f} MB")
-        
-        # Если файл все еще слишком большой, пробуем дополнительное сжатие
-        if compressed_size_mb > target_size_mb:
-            logger.warning(f"Сжатый файл все еще слишком большой: {compressed_size_mb:.2f} MB > {target_size_mb} MB")
-            
-            # Пробуем еще более агрессивное сжатие
-            return _compress_video_aggressive(input_path, output_path, target_size_mb)
-        
         return output_path
-        
     except Exception as e:
         logger.error(f"Ошибка при сжатии видео {input_path}: {e}")
-        return None
-
-def _compress_video_aggressive(input_path, output_path, target_size_mb=45):
-    """
-    Дополнительное агрессивное сжатие видео.
-    """
-    try:
-        # Создаем новый временный файл
-        temp_dir = tempfile.gettempdir()
-        aggressive_output = os.path.join(temp_dir, f"aggressive_{os.path.basename(input_path)}")
-        
-        cap = cv2.VideoCapture(input_path)
-        if not cap.isOpened():
-            return None
-        
-        fps = cap.get(cv2.CAP_PROP_FPS)
-        width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
-        height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
-        total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
-        
-        # Очень агрессивное уменьшение размера
-        new_width = 480  # Уменьшаем еще больше
-        new_height = int(height * (480 / width))
-        
-        # Убеждаемся, что размеры четные
-        new_width = new_width if new_width % 2 == 0 else new_width - 1
-        new_height = new_height if new_height % 2 == 0 else new_height - 1
-        
-        # Убеждаемся, что размеры не меньше минимальных
-        new_width = max(new_width, 320)
-        new_height = max(new_height, 180)
-        
-        # Уменьшаем FPS для экономии места
-        new_fps = min(fps, 10)  # Максимум 10 FPS
-        
-        fourcc = cv2.VideoWriter_fourcc(*'mp4v')
-        out = cv2.VideoWriter(aggressive_output, fourcc, new_fps, (new_width, new_height))
-        
-        if not out.isOpened():
-            cap.release()
-            return None
-        
-        logger.info(f"Агрессивное сжатие: {new_width}x{new_height}, {new_fps} FPS")
-        
-        frame_count = 0
-        frame_skip = max(1, int(fps / new_fps))  # Пропускаем кадры для снижения FPS
-        
-        while True:
-            ret, frame = cap.read()
-            if not ret:
-                break
-            
-            # Пропускаем кадры для снижения FPS
-            if frame_count % frame_skip == 0:
-                # Изменяем размер кадра
-                frame = cv2.resize(frame, (new_width, new_height), interpolation=cv2.INTER_AREA)
-                out.write(frame)
-            
-            frame_count += 1
-            
-            if frame_count % 100 == 0:
-                progress = (frame_count / total_frames) * 100
-                logger.info(f"Агрессивное сжатие: {progress:.1f}% ({frame_count}/{total_frames})")
-        
-        cap.release()
-        out.release()
-        
-        # Проверяем размер
-        compressed_size = os.path.getsize(aggressive_output)
-        compressed_size_mb = compressed_size / (1024 * 1024)
-        
-        logger.info(f"Агрессивное сжатие завершено: {compressed_size_mb:.2f} MB")
-        
-        if compressed_size_mb <= target_size_mb:
-            # Заменяем оригинальный файл
-            if os.path.exists(output_path):
-                os.remove(output_path)
-            os.rename(aggressive_output, output_path)
-            return output_path
-        else:
-            # Удаляем временный файл
-            if os.path.exists(aggressive_output):
-                os.remove(aggressive_output)
-            logger.error(f"Не удалось сжать видео до требуемого размера: {compressed_size_mb:.2f} MB")
-            return None
-            
-    except Exception as e:
-        logger.error(f"Ошибка при агрессивном сжатии видео: {e}")
         return None
 
 def process_image(image_path):
@@ -681,19 +525,14 @@ async def send_files_with_caption(file_paths, caption=""):
         if not TELEGRAM_TOKEN:
             logger.error("Telegram токен не настроен! Проверьте конфигурацию.")
             raise ValueError("Telegram токен не настроен")
-        
         if not CHAT_IDS:
             logger.error("Chat IDs не настроены! Проверьте конфигурацию.")
             raise ValueError("Chat IDs не настроены")
-        
-        # Увеличиваем таймаут для отправки больших файлов
         httpx_request = HTTPXRequest(read_timeout=TELEGRAM_TIMEOUT, connect_timeout=TELEGRAM_CONNECT_TIMEOUT)
         bot = Bot(token=TELEGRAM_TOKEN, request=httpx_request)
-        sent_files = []  # Список для отслеживания успешно отправленных файлов
-        available_chats = []  # Список доступных чатов
-        temp_files = []  # Список временных файлов для удаления
-
-        # Проверяем доступность чатов
+        sent_files = []
+        available_chats = []
+        temp_files = []
         for chat_id in CHAT_IDS:
             try:
                 await bot.get_chat(chat_id)
@@ -702,52 +541,38 @@ async def send_files_with_caption(file_paths, caption=""):
             except Exception as e:
                 logger.error(f"Chat {chat_id} is not available: {e}")
                 continue
-
         if not available_chats:
             logger.error("No available chats found")
             raise Exception("No available chats found")
-
-        # Отправляем файлы
         for file_path in file_paths:
             file_path = Path(file_path)
             if not file_path.exists():
                 logger.warning(f"File not found: {file_path}")
                 continue
-            
             try:
                 file_ext = file_path.suffix.lower()
                 file_size = file_path.stat().st_size
                 file_size_mb = file_size / (1024 * 1024)
-                
-                # Обработка видео файлов
+                notify_user = False
+                notify_message = ""
                 if file_ext in ['.mp4', '.avi', '.mkv', '.mov']:
                     logger.info(f"Обработка видео файла: {file_path} ({file_size_mb:.2f} MB)")
-                    
-                    # Проверяем размер файла
+                    actual_file_path = str(file_path)
+                    temp_files = []
+                    # Сначала легкое сжатие, если нужно
                     if file_size > MAX_VIDEO_SIZE:
-                        logger.info(f"Видео {file_path} превышает лимит Telegram (50 МБ), начинаем сжатие...")
-                        
-                        # Сжимаем видео
+                        logger.info(f"Видео {file_path} превышает лимит Telegram (50 МБ), начинаем легкое сжатие...")
                         compressed_path = compress_video(str(file_path), target_size_mb=45)
                         if compressed_path is None:
                             logger.error(f"Не удалось сжать видео {file_path} до требуемого размера")
-                            # Продолжаем с следующим файлом
                             continue
-                        
-                        # Используем сжатый файл
                         actual_file_path = compressed_path
                         temp_files.append(compressed_path)
                         compressed_size = os.path.getsize(compressed_path)
                         compressed_size_mb = compressed_size / (1024 * 1024)
                         logger.info(f"Видео сжато: {compressed_size_mb:.2f} MB")
-                    else:
-                        actual_file_path = str(file_path)
-                        logger.info(f"Видео {file_path} подходит по размеру ({file_size_mb:.2f} MB)")
-                    
-                    # Отправляем видео с повторными попытками
                     video_sent = False
-                    max_retries = 3
-                    
+                    max_retries = 2  # 1 обычная + 1 попытка с доп. сжатием
                     for attempt in range(max_retries):
                         try:
                             with open(actual_file_path, 'rb') as f:
@@ -763,41 +588,82 @@ async def send_files_with_caption(file_paths, caption=""):
                                         logger.info(f"Видео {file_path} успешно отправлено в Telegram chat {chat_id} (попытка {attempt + 1})")
                                         sent_files.append(str(file_path))
                                         video_sent = True
-                                        break  # Отправляем только в первый доступный чат
+                                        break
                                     except Exception as e:
                                         error_msg = str(e)
                                         logger.error(f"Ошибка отправки видео в chat {chat_id} (попытка {attempt + 1}): {error_msg}")
-                                        if "Request Entity Too Large" in error_msg:
-                                            logger.error(f"Файл все еще слишком большой для Telegram: {actual_file_path}")
+                                        if "Request Entity Too Large" in error_msg and attempt == 0:
+                                            logger.warning(f"Файл слишком большой для Telegram: {actual_file_path}. Пробуем дополнительное сжатие...")
+                                            # Дополнительное сжатие: fps=10, качество=70
+                                            import tempfile
+                                            import cv2
+                                            cap = cv2.VideoCapture(str(file_path))
+                                            if not cap.isOpened():
+                                                logger.error(f"Не удалось открыть видео для дополнительного сжатия: {file_path}")
+                                                break
+                                            fps = cap.get(cv2.CAP_PROP_FPS)
+                                            width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
+                                            height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+                                            new_fps = min(fps, 10) if fps > 0 else 10
+                                            fourcc = cv2.VideoWriter_fourcc(*'mp4v')
+                                            temp_output = tempfile.NamedTemporaryFile(suffix='.mp4', delete=False)
+                                            temp_output.close()
+                                            out = cv2.VideoWriter(temp_output.name, fourcc, new_fps, (width, height))
+                                            frame_count = 0
+                                            frame_skip = max(1, int(fps / new_fps)) if fps > 0 else 1
+                                            while True:
+                                                ret, frame = cap.read()
+                                                if not ret:
+                                                    break
+                                                if frame_count % frame_skip == 0:
+                                                    # Доп. сжатие JPEG качества
+                                                    encode_param = [int(cv2.IMWRITE_JPEG_QUALITY), 70]
+                                                    result, encimg = cv2.imencode('.jpg', frame, encode_param)
+                                                    if result:
+                                                        frame = cv2.imdecode(encimg, 1)
+                                                    out.write(frame)
+                                                frame_count += 1
+                                            cap.release()
+                                            out.release()
+                                            actual_file_path = temp_output.name
+                                            temp_files.append(temp_output.name)
+                                            logger.info(f"Дополнительное сжатие завершено: {actual_file_path}")
+                                            break  # выйти из цикла chat_id, повторить попытку отправки
+                                        elif "Request Entity Too Large" in error_msg and attempt == 1:
+                                            logger.error(f"Файл слишком большой даже после дополнительного сжатия: {actual_file_path}. Видео не будет отправлено.")
+                                            video_sent = False
                                             break
                                         continue
-                            
                             if video_sent:
-                                break  # Выходим из цикла попыток, если отправка успешна
-                                
+                                break
                         except Exception as e:
                             error_msg = str(e)
                             logger.error(f"Ошибка при попытке {attempt + 1} отправки видео {file_path}: {error_msg}")
                             if "Timed out" in error_msg and attempt < max_retries - 1:
                                 logger.info(f"Таймаут при отправке, повторная попытка {attempt + 2}/{max_retries}")
                                 import asyncio
-                                await asyncio.sleep(2)  # Пауза перед повторной попыткой
+                                await asyncio.sleep(2)
                                 continue
                             elif attempt == max_retries - 1:
                                 logger.error(f"Все попытки отправки видео {file_path} исчерпаны")
-                    
                     if not video_sent:
                         logger.warning(f"Не удалось отправить видео {file_path} ни в один чат после {max_retries} попыток")
-                
+                        notify_user = True
+                        notify_message = f"Видео {file_path.name} не удалось отправить в Telegram. Проверьте лимиты размера и логи."
+                    # Удаляем временные файлы после отправки/попыток
+                    for temp_file in temp_files:
+                        try:
+                            if os.path.exists(temp_file):
+                                os.remove(temp_file)
+                                logger.info(f"Удален временный файл: {temp_file}")
+                        except Exception as e:
+                            logger.error(f"Ошибка удаления временного файла {temp_file}: {e}")
                 else:
-                    # Обработка других файлов (изображения, документы)
                     if file_size > MAX_FILE_SIZE:
                         logger.warning(f"Файл {file_path} превышает лимит Telegram для документов (10 МБ) и не будет отправлен.")
                         continue
-                    
                     file_sent = False
                     max_retries = 3
-                    
                     for attempt in range(max_retries):
                         try:
                             with file_path.open('rb') as f:
@@ -812,33 +678,46 @@ async def send_files_with_caption(file_paths, caption=""):
                                         logger.info(f"Файл {file_path} успешно отправлен в Telegram chat {chat_id} (попытка {attempt + 1})")
                                         sent_files.append(str(file_path))
                                         file_sent = True
-                                        break  # Отправляем только в первый доступный чат
+                                        break
                                     except Exception as e:
                                         logger.error(f"Ошибка отправки файла в chat {chat_id} (попытка {attempt + 1}): {e}")
                                         continue
-                            
                             if file_sent:
-                                break  # Выходим из цикла попыток, если отправка успешна
-                                
+                                break
                         except Exception as e:
                             error_msg = str(e)
                             logger.error(f"Ошибка при попытке {attempt + 1} отправки файла {file_path}: {error_msg}")
                             if "Timed out" in error_msg and attempt < max_retries - 1:
                                 logger.info(f"Таймаут при отправке, повторная попытка {attempt + 2}/{max_retries}")
                                 import asyncio
-                                await asyncio.sleep(2)  # Пауза перед повторной попыткой
+                                await asyncio.sleep(2)
                                 continue
                             elif attempt == max_retries - 1:
                                 logger.error(f"Все попытки отправки файла {file_path} исчерпаны")
-                    
                     if not file_sent:
                         logger.warning(f"Не удалось отправить файл {file_path} ни в один чат после {max_retries} попыток")
-                
+                        notify_user = True
+                        notify_message = f"Файл {file_path.name} не удалось отправить в Telegram. Проверьте лимиты размера и логи."
+                # Уведомление пользователя (если не удалось отправить)
+                if notify_user and notify_message:
+                    try:
+                        import tkinter
+                        from tkinter import messagebox
+                        root = None
+                        # Попытка найти уже существующий root
+                        for widget in tkinter._default_root.children.values():
+                            if isinstance(widget, tkinter.Tk):
+                                root = widget
+                                break
+                        if root is None:
+                            root = tkinter.Tk()
+                            root.withdraw()
+                        messagebox.showwarning("Ошибка отправки файла", notify_message)
+                    except Exception:
+                        logger.warning(f"[UI] {notify_message}")
             except Exception as e:
                 logger.error(f"Ошибка обработки файла {file_path}: {e}")
                 continue
-        
-        # Удаляем временные файлы
         for temp_file in temp_files:
             try:
                 if os.path.exists(temp_file):
@@ -846,11 +725,24 @@ async def send_files_with_caption(file_paths, caption=""):
                     logger.info(f"Удален временный файл: {temp_file}")
             except Exception as e:
                 logger.error(f"Ошибка удаления временного файла {temp_file}: {e}")
-
         return len(sent_files) > 0
-
     except Exception as e:
         logger.error(f"Ошибка отправки файлов в Telegram: {e}")
+        # Попытка уведомить пользователя о критической ошибке
+        try:
+            import tkinter
+            from tkinter import messagebox
+            root = None
+            for widget in tkinter._default_root.children.values():
+                if isinstance(widget, tkinter.Tk):
+                    root = widget
+                    break
+            if root is None:
+                root = tkinter.Tk()
+                root.withdraw()
+            messagebox.showerror("Ошибка Telegram", f"Ошибка отправки файлов: {e}")
+        except Exception:
+            logger.warning(f"[UI] Ошибка отправки файлов: {e}")
         raise
 
 def send_files(file_paths, caption=""):
