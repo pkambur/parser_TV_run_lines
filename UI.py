@@ -22,7 +22,14 @@ def load_channels():
     return config_manager.load_channels()
 
 class MonitoringUI:
+    """
+    Класс графического интерфейса для мониторинга телеканалов.
+    Управляет основным окном, виджетами, статусами и настройками.
+    """
     def __init__(self, app):
+        """
+        Инициализация UI, создание основного окна, загрузка каналов и виджетов.
+        """
         self.app = app
         self.root = tk.Tk()
         self.root.title("Мониторинг телеканалов")
@@ -52,6 +59,9 @@ class MonitoringUI:
         self.create_widgets()
         
     def create_widgets(self):
+        """
+        Создаёт основной контейнер, sidebar, main_area и кнопки управления.
+        """
         # Основной контейнер
         self.container = tk.Frame(self.root)
         self.container.pack(fill="both", expand=True)
@@ -80,6 +90,9 @@ class MonitoringUI:
         self._add_tooltip(self.settings_btn, "Настройки телеканалов")
 
     def _create_sidebar_content(self):
+        """
+        Создаёт содержимое sidebar: статус планировщика, мониторинга, RBK/MIR24 и кнопки.
+        """
         scheduler_frame = ttk.LabelFrame(self.sidebar, text="Статус планировщика", padding=10)
         scheduler_frame.pack(fill="x", padx=(30,10), pady=5)
         self.scheduler_status = ttk.Label(scheduler_frame, text="Планировщик: Активен")
@@ -140,6 +153,9 @@ class MonitoringUI:
         self.status_label.pack(side="bottom", fill="x", padx=10, pady=5)
 
     def _create_video_grid(self):
+        """
+        Создаёт сетку для отображения видеопотоков и контролов.
+        """
         grid = tk.Frame(self.main_area, bg="#222")
         grid.pack(expand=True, fill="both", padx=20, pady=20)
         self.video_labels = []
@@ -180,11 +196,17 @@ class MonitoringUI:
             self.start_video_stream(idx)
 
     def _on_resize(self, event=None):
+        """
+        Обновляет кадры при изменении размера main_area.
+        """
         # При изменении размера main_area обновить кадры
         for idx in range(4):
             self._force_update_frame(idx)
 
     def _force_update_frame(self, idx):
+        """
+        Принудительно обновляет кадр для корректного ресайза.
+        """
         # Принудительно обновить кадр для корректного ресайза
         if hasattr(self, 'captures') and self.captures[idx] is not None:
             cap = self.captures[idx]
@@ -213,6 +235,9 @@ class MonitoringUI:
                 label.configure(image=imgtk)
 
     def toggle_sidebar(self):
+        """
+        Скрывает или показывает sidebar.
+        """
         if self.sidebar_visible:
             self.sidebar.pack_forget()
             self.sidebar_visible = False
@@ -225,6 +250,9 @@ class MonitoringUI:
             self.sidebar_visible = True
 
     def _handle_disconnect(self, idx):
+        """
+        Обработка обрыва соединения для видеопотока.
+        """
         """Обработка обрыва соединения для видеопотока."""
         # Останавливаем текущий захват, если он есть
         if self.captures[idx] is not None:
@@ -256,6 +284,9 @@ class MonitoringUI:
             self.root.after(5000, lambda: self.start_video_stream(idx))
 
     def toggle_video_stream(self, idx):
+        """
+        Включает/выключает видеопоток по индексу.
+        """
         self.video_stream_active[idx] = not self.video_stream_active[idx]
         if self.video_stream_active[idx]:
             # Возобновляем
@@ -287,6 +318,9 @@ class MonitoringUI:
             label.configure(image=imgtk)
 
     def on_channel_change(self, idx):
+        """
+        Обработка смены канала в combobox.
+        """
         # Остановить предыдущий поток
         if self.captures[idx] is not None:
             self.captures[idx].release()
@@ -307,6 +341,9 @@ class MonitoringUI:
         self.start_video_stream(idx)
 
     def start_video_stream(self, idx):
+        """
+        Запускает видеопоток для выбранного канала.
+        """
         # Если поток неактивен, не запускаем его (вызывается из toggle)
         if not self.video_stream_active[idx]:
             return
@@ -410,6 +447,9 @@ class MonitoringUI:
         threading.Thread(target=_start_capture_and_loop, daemon=True).start()
         
     def update_lines_status(self, status):
+        """
+        Обновляет статус мониторинга строк.
+        """
         self.lines_status.config(text=f"Состояние: {status}")
         if status == "Запущен":
             self.start_lines_button.config(state="disabled")
@@ -419,9 +459,15 @@ class MonitoringUI:
             self.stop_lines_button.config(state="disabled")
             
     def update_lines_scheduler_status(self, status):
+        """
+        Обновляет статус планировщика строк.
+        """
         self.lines_scheduler_status.config(text=f"Планировщик: {status}")
             
     def update_rbk_mir24_status(self, status):
+        """
+        Обновляет статус RBK/MIR24.
+        """
         self.rbk_mir24_status.config(text=f"Состояние: {status}")
         if status == "Запущен":
             self.start_rbk_mir24_button.config(state="disabled")
@@ -431,9 +477,15 @@ class MonitoringUI:
             self.stop_rbk_mir24_button.config(state="disabled")
             
     def update_rbk_mir24_scheduler_status(self, status):
+        """
+        Обновляет статус планировщика RBK/MIR24.
+        """
         self.rbk_mir24_scheduler_status.config(text=f"Планировщик: {status}")
             
     def update_processing_status(self, status):
+        """
+        Обновляет статус обработки скриншотов.
+        """
         if hasattr(self, 'processing_status') and self.processing_status is not None:
             self.processing_status.config(text=f"Статус обработки: {status}")
         if "Выполняется" in status or "Отправка" in status or "Обработка" in status:
@@ -442,6 +494,9 @@ class MonitoringUI:
             self.save_and_send_lines_button.config(state="normal")
             
     def update_video_check_status(self, status):
+        """
+        Обновляет статус проверки crop-видео.
+        """
         self.video_check_status.config(text=f"Статус: {status}")
         if "Выполняется" in status:
             self.check_and_send_video_button.config(state="disabled")
@@ -449,16 +504,27 @@ class MonitoringUI:
             self.check_and_send_video_button.config(state="normal")
             
     def update_scheduler_status(self, status):
+        """
+        Обновляет статус планировщика задач.
+        """
         self.scheduler_status.config(text=f"Планировщик: {status}")
             
     def update_status(self, message):
+        """
+        Обновляет общий статус приложения.
+        """
         self.status_label.config(text=message)
         
     def run(self):
+        """
+        Запускает главный цикл Tkinter.
+        """
         self.root.mainloop()
         
     def cleanup(self):
-        """Очистка ресурсов при закрытии."""
+        """
+        Очистка ресурсов при закрытии UI.
+        """
         try:
             # Проверяем, что captures инициализирован
             if hasattr(self, 'captures') and self.captures:
@@ -491,6 +557,9 @@ class MonitoringUI:
             logger.error(f"Ошибка при закрытии окна Tkinter: {e}")
 
     def open_settings_window(self):
+        """
+        Открывает окно настроек телеканалов с валидацией всех полей.
+        """
         settings_win = tk.Toplevel(self.root)
         settings_win.title("Настройки телеканалов")
         settings_win.geometry("600x700") # Увеличим высоту для сообщений об ошибках
@@ -996,6 +1065,9 @@ class MonitoringUI:
         lines_text.bind('<KeyRelease>', on_text_change)
 
     def _add_tooltip(self, widget, text):
+        """
+        Добавляет простой tooltip для Tkinter-виджета.
+        """
         # Простой tooltip для Tkinter
         def on_enter(event):
             self.tooltip = tk.Toplevel(widget)
@@ -1013,7 +1085,9 @@ class MonitoringUI:
         widget.bind("<Leave>", on_leave)
 
     def update_recording_status(self, channel_name, is_recording):
-        """Обновляет статус записи для канала и рамку в UI."""
+        """
+        Обновляет статус записи для канала.
+        """
         if channel_name in self.recording_status:
             self.recording_status[channel_name] = is_recording
             logger.info(f"Статус записи для {channel_name} изменен на {is_recording}")
@@ -1029,7 +1103,9 @@ class MonitoringUI:
                     self.grid_cells[idx].config(highlightbackground=color, highlightcolor=color)
 
     def toggle_scheduler_buttons(self, paused: bool):
-        """Переключение состояния кнопок паузы/возобновления планировщика."""
+        """
+        Переключает состояние кнопок планировщика (пауза/возобновить).
+        """
         if paused:
             self.pause_scheduler_button.config(state="disabled")
             self.resume_scheduler_button.config(state="normal")
@@ -1038,13 +1114,22 @@ class MonitoringUI:
             self.resume_scheduler_button.config(state="disabled")
 
     def show_progress(self):
+        """
+        Показывает прогресс-бар.
+        """
         self.progress_bar.pack(fill='x', padx=5, pady=5)
         self.progress_var.set(0)
         self.progress_bar.update()
 
     def hide_progress(self):
+        """
+        Скрывает прогресс-бар.
+        """
         self.progress_bar.pack_forget()
 
     def update_progress(self, percent):
+        """
+        Обновляет значение прогресс-бара.
+        """
         self.progress_var.set(percent)
         self.progress_bar.update()

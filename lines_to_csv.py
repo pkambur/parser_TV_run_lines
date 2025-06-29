@@ -21,11 +21,20 @@ logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(
 logger = logging.getLogger(__name__)
 
 class TextDuplicateChecker:
+    """
+    Класс для проверки дублирования текста по схожести.
+    """
     def __init__(self, similarity_threshold: float = 0.8):
+        """
+        Инициализация чекера дубликатов.
+        """
         self.previous_texts: List[str] = []
         self.similarity_threshold = similarity_threshold
 
     def is_duplicate(self, text: str, compare_texts: List[str]) -> bool:
+        """
+        Проверяет, является ли текст дубликатом среди compare_texts.
+        """
         for prev_text in compare_texts:
             if not prev_text or not text:
                 continue
@@ -35,13 +44,21 @@ class TextDuplicateChecker:
         return False
 
     def add_text(self, text: str):
+        """
+        Добавляет текст в историю для последующей проверки.
+        """
         self.previous_texts.append(text)
 
 def load_keywords() -> List[str]:
-    """Загрузка ключевых слов через config_manager."""
+    """
+    Загрузка ключевых слов через config_manager.
+    """
     return config_manager.get_keywords_list()
 
 def preprocess_image(image_path: str) -> np.ndarray:
+    """
+    Предобработка изображения для OCR.
+    """
     try:
         img = cv2.imread(image_path, cv2.IMREAD_GRAYSCALE)
         if img is None:
@@ -53,6 +70,9 @@ def preprocess_image(image_path: str) -> np.ndarray:
         return None
 
 def recognize_text(image_path: str) -> str:
+    """
+    Распознавание текста на изображении с помощью pytesseract.
+    """
     try:
         img = preprocess_image(image_path)
         if img is None:
@@ -171,8 +191,7 @@ def is_readable_text_local(text: str) -> bool:
 
 def is_readable_text(text: str, image_path: str) -> bool:
     """
-    Проверка читаемости текста. Использует локальную проверку,
-    так как Hugging Face API для анализа изображений требует специальных моделей.
+    Проверка читаемости текста. Использует локальную проверку или Hugging Face API.
     """
     # Импортируем токен из telegram_sender
     try:
@@ -192,6 +211,9 @@ def is_readable_text(text: str, image_path: str) -> bool:
     return is_readable_text_local(text)
 
 def process_file(image_path: str, keywords: List[str], duplicate_checker: TextDuplicateChecker, daily_file_path: str) -> Tuple[Optional[str], Optional[str]]:
+    """
+    Обрабатывает файл: распознаёт текст, фильтрует по ключевым словам и дубликатам.
+    """
     text = recognize_text(image_path)
     if not text:
         return None, None
@@ -216,6 +238,9 @@ def process_file(image_path: str, keywords: List[str], duplicate_checker: TextDu
     return None, None
 
 def save_to_daily_file(channel: str, text: str, image_path: str, daily_file_path: str):
+    """
+    Сохраняет строку в ежедневный файл.
+    """
     try:
         timestamp = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
         data = {'Timestamp': timestamp, 'Channel': channel, 'Text': text, 'ImagePath': image_path}
@@ -232,6 +257,9 @@ def save_to_daily_file(channel: str, text: str, image_path: str, daily_file_path
         logger.error(f"Ошибка сохранения в {daily_file_path}: {e}")
 
 def process_screenshots(screenshots_dir: str, processed_dir: str, daily_file_path: str):
+    """
+    Обрабатывает скриншоты: распознаёт текст, фильтрует, сохраняет и отправляет.
+    """
     keywords = load_keywords()
     duplicate_checker = TextDuplicateChecker()
     screenshots_dir = Path(screenshots_dir)
@@ -295,8 +323,7 @@ def process_screenshots(screenshots_dir: str, processed_dir: str, daily_file_pat
 
 def get_daily_file_path():
     """
-    Возвращает путь к ежедневному файлу с бегущими строками и список ранее распознанных текстов за день.
-    Путь формируется по текущей дате. Если файл существует, возвращает также список текстов из него.
+    Возвращает путь к ежедневному файлу.
     """
     file_path = Path(f"daily_lines_{datetime.now().strftime('%Y-%m-%d')}.xlsx")
     previous_texts = []

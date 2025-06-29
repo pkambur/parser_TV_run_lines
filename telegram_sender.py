@@ -16,7 +16,9 @@ import json
 
 # Настройка логирования
 def setup_logging():
-    """Настройка логирования для telegram_sender."""
+    """
+    Настройка логирования для telegram_sender.
+    """
     # Получаем путь к директории исполняемого файла
     if getattr(sys, 'frozen', False):
         # Если это исполняемый файл (PyInstaller)
@@ -47,7 +49,9 @@ def setup_logging():
 logger = setup_logging()
 
 def load_config():
-    """Загружает конфигурацию из файла config.json или переменных окружения."""
+    """
+    Загружает конфигурацию из файла config.json или переменных окружения.
+    """
     config = {
         'telegram_token': None,
         'chat_ids': [],
@@ -351,7 +355,9 @@ def _compress_video_aggressive(input_path, output_path, target_size_mb=45):
         return None
 
 def process_image(image_path):
-    """Обработка изображения для соответствия требованиям Telegram."""
+    """
+    Обработка изображения для соответствия требованиям Telegram.
+    """
     try:
         with Image.open(image_path) as img:
             # Конвертируем в RGB если нужно
@@ -389,6 +395,9 @@ def process_image(image_path):
         raise
 
 async def send_to_telegram(excel_file, screenshot_files):
+    """
+    Асинхронная отправка Excel-файла и скриншотов в Telegram.
+    """
     try:
         # Проверяем конфигурацию
         if not TELEGRAM_TOKEN:
@@ -617,7 +626,9 @@ async def send_to_telegram(excel_file, screenshot_files):
         raise
 
 def send_report_files(excel_file, screenshot_files):
-    """Send report files (Excel and screenshots) to Telegram."""
+    """
+    Отправка отчётных файлов в Telegram (синхронно).
+    """
     import asyncio
     try:
         # Проверяем существование Excel файла
@@ -662,7 +673,9 @@ def send_report_files(excel_file, screenshot_files):
         return False
 
 async def send_files_with_caption(file_paths, caption=""):
-    """Отправка файлов в Telegram с пользовательским caption."""
+    """
+    Асинхронная отправка файлов с подписью в Telegram.
+    """
     try:
         # Проверяем конфигурацию
         if not TELEGRAM_TOKEN:
@@ -841,7 +854,9 @@ async def send_files_with_caption(file_paths, caption=""):
         raise
 
 def send_files(file_paths, caption=""):
-    """Send files to Telegram with custom caption."""
+    """
+    Синхронная отправка файлов с подписью в Telegram.
+    """
     import asyncio
     try:
         # Проверяем файлы перед отправкой

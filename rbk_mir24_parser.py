@@ -22,14 +22,21 @@ LINES_VIDEO_ROOT = Path("lines_video").resolve()  # Для crop-роликов
 VIDEO_DURATION = 240  # 240 секунд
 
 def get_current_time_str():
-    """Возвращает текущее время в формате HH:MM"""
+    """
+    Возвращает текущее время в формате HH:MM.
+    """
     return datetime.now().strftime("%H:%M")
 
 def load_channels():
-    """Загрузка конфигурации каналов через config_manager."""
+    """
+    Загрузка конфигурации каналов через config_manager.
+    """
     return config_manager.load_channels()
 
 async def check_url_accessible(url):
+    """
+    Проверяет доступность URL (асинхронно).
+    """
     try:
         loop = asyncio.get_event_loop()
         await loop.run_in_executor(None, lambda: urllib.request.urlopen(url, timeout=5))
@@ -40,6 +47,9 @@ async def check_url_accessible(url):
         return False
 
 async def check_video_resolution(url):
+    """
+    Получает разрешение видео по URL с помощью ffprobe (асинхронно).
+    """
     try:
         cmd = [
             "ffprobe",
@@ -78,6 +88,9 @@ async def check_video_resolution(url):
         return None
 
 async def validate_crop_params(channel_name, channel_info, resolution):
+    """
+    Валидирует параметры crop для канала с учетом разрешения видео.
+    """
     crop = channel_info.get("crop", "")
     if not crop:
         logger.warning(f"Фильтр crop не указан для {channel_name}")
@@ -108,7 +121,9 @@ async def validate_crop_params(channel_name, channel_info, resolution):
         return ""
 
 async def record_video_opencv(channel_name, stream_url, output_path, crop_params, duration):
-    """Запись видео с использованием OpenCV."""
+    """
+    Запись видео с использованием OpenCV.
+    """
     try:
         # Открываем видеопоток
         cap = cv2.VideoCapture(stream_url)
@@ -191,7 +206,9 @@ async def record_video_opencv(channel_name, stream_url, output_path, crop_params
             pass
 
 async def record_lines_video(channel_name, channel_info, duration=VIDEO_DURATION):
-    """Записывает crop-ролик в lines_video/<channel>/"""
+    """
+    Записывает crop-ролик в lines_video/<channel>/.
+    """
     try:
         # Проверка существования корневой директории lines_video
         if not LINES_VIDEO_ROOT.exists():
@@ -228,6 +245,9 @@ async def record_lines_video(channel_name, channel_info, duration=VIDEO_DURATION
         logger.error(f"Ошибка при записи crop-видео для {channel_name}: {e}")
 
 async def process_rbk_mir24(app, ui, send_files=False, channels=None, force_crop=False):
+    """
+    Основная корутина для записи crop-видео RBK и MIR24, распознавания и отправки.
+    """
     logger.info("Запуск записи crop-видео (с учётом lines)")
     if ui.root.winfo_exists():
         ui.update_status("Запуск записи crop-видео...")
@@ -335,6 +355,9 @@ async def process_rbk_mir24(app, ui, send_files=False, channels=None, force_crop
             ui.update_rbk_mir24_status("Ошибка")
 
 async def stop_rbk_mir24(app, ui):
+    """
+    Остановка записи RBK и MIR24.
+    """
     logger.info("Остановка записи РБК и МИР24")
     if ui.root.winfo_exists():
         ui.update_status("Остановка записи РБК и МИР24...")
@@ -361,9 +384,14 @@ async def stop_rbk_mir24(app, ui):
             ui.update_rbk_mir24_status("Остановлен")
 
 class RBKMIR24Manager:
-    """Менеджер для управления записью RBK и MIR24 каналов."""
+    """
+    Менеджер для управления записью и мониторингом каналов RBK и MIR24.
+    """
     
     def __init__(self, app, ui):
+        """
+        Инициализация менеджера RBK/MIR24.
+        """
         self.app = app
         self.ui = ui
         self.recording_channels = []
@@ -375,12 +403,11 @@ class RBKMIR24Manager:
     def start_manual_recording(self, channels: Optional[List[str]] = None) -> bool:
         """
         Запуск ручной записи crop-видео для RBK и MIR24.
-        
+
         Args:
             channels: Список каналов для записи. Если None, используются все доступные.
-        
         Returns:
-            bool: True если запись запущена успешно, False в противном случае.
+            bool: True если запись запущена успешно, False иначе.
         """
         try:
             from rbk_mir24_parser import get_current_time_str, process_rbk_mir24
@@ -445,9 +472,8 @@ class RBKMIR24Manager:
     def stop_recording(self) -> bool:
         """
         Остановка записи RBK и MIR24.
-        
         Returns:
-            bool: True если запись остановлена успешно, False в противном случае.
+            bool: True если запись остановлена успешно, False иначе.
         """
         if not self.rbk_mir24_running or self.app.loop is None:
             messagebox.showwarning("Предупреждение", "Мониторинг RBK и MIR24 уже остановлен или event loop не инициализирован")
@@ -480,7 +506,6 @@ class RBKMIR24Manager:
     def start_scheduled_crop_recording(self, channels: Optional[List[str]] = None) -> None:
         """
         Запуск записи crop-видео для RBK и MIR24 по расписанию.
-        
         Args:
             channels: Список каналов для записи. Если None, используются RBK и MIR24.
         """
@@ -518,7 +543,6 @@ class RBKMIR24Manager:
     def start_scheduled_lines_monitoring(self, channels: Optional[List[str]] = None) -> None:
         """
         Запуск мониторинга строк (скриншотов) для RBK и MIR24 по расписанию.
-        
         Args:
             channels: Список каналов для мониторинга. Если None, используются RBK и MIR24.
         """
@@ -557,9 +581,8 @@ class RBKMIR24Manager:
     def start_lines_monitoring(self) -> bool:
         """
         Запуск мониторинга строк по кнопке.
-        
         Returns:
-            bool: True если мониторинг запущен успешно, False в противном случае.
+            bool: True если мониторинг запущен успешно, False иначе.
         """
         if self.lines_monitoring_running:
             logger.warning("Мониторинг уже запущен")
@@ -590,9 +613,8 @@ class RBKMIR24Manager:
     def stop_lines_monitoring(self) -> bool:
         """
         Остановка мониторинга строк.
-        
         Returns:
-            bool: True если мониторинг остановлен успешно, False в противном случае.
+            bool: True если мониторинг остановлен успешно, False иначе.
         """
         if not self.lines_monitoring_running:
             messagebox.showwarning("Предупреждение", "Мониторинг строк уже остановлен")
@@ -619,7 +641,9 @@ class RBKMIR24Manager:
             return False
     
     def cleanup(self) -> None:
-        """Очистка ресурсов менеджера."""
+        """
+        Очистка ресурсов менеджера.
+        """
         try:
             # Останавливаем мониторинг строк
             if self.lines_monitoring_running:
@@ -637,9 +661,17 @@ class RBKMIR24Manager:
             logger.error(f"Ошибка при очистке ресурсов RBKMIR24Manager: {e}")
     
     def is_recording(self) -> bool:
-        """Проверяет, запущена ли запись."""
+        """
+        Проверяет, запущена ли запись.
+        Returns:
+            bool: True если запись активна, иначе False.
+        """
         return self.rbk_mir24_running
     
     def is_lines_monitoring(self) -> bool:
-        """Проверяет, запущен ли мониторинг строк."""
+        """
+        Проверяет, запущен ли мониторинг строк.
+        Returns:
+            bool: True если мониторинг активен, иначе False.
+        """
         return self.lines_monitoring_running

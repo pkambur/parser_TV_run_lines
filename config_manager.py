@@ -14,6 +14,9 @@ class ConfigManager:
     """
     
     def __init__(self):
+        """
+        Инициализация менеджера конфигурации.
+        """
         self._channels_cache: Optional[Dict[str, Any]] = None
         self._keywords_cache: Optional[Dict[str, Any]] = None
         self._channels_last_modified: Optional[datetime] = None
@@ -25,7 +28,9 @@ class ConfigManager:
         self.keywords_file = Path('keywords.json')
     
     def _get_file_modification_time(self, file_path: Path) -> Optional[datetime]:
-        """Получает время последней модификации файла."""
+        """
+        Получает время последней модификации файла.
+        """
         try:
             if file_path.exists():
                 return datetime.fromtimestamp(file_path.stat().st_mtime)
@@ -34,7 +39,9 @@ class ConfigManager:
         return None
     
     def _is_cache_valid(self, file_path: Path, last_modified: Optional[datetime]) -> bool:
-        """Проверяет, действителен ли кэш для файла."""
+        """
+        Проверяет, действителен ли кэш для файла.
+        """
         if last_modified is None:
             return False
         
@@ -254,7 +261,9 @@ class ConfigManager:
             return False
     
     def clear_cache(self):
-        """Очищает кэш конфигурации."""
+        """
+        Очищает кэш конфигурации.
+        """
         self._channels_cache = None
         self._keywords_cache = None
         self._channels_last_modified = None
@@ -262,7 +271,9 @@ class ConfigManager:
         logger.info("Кэш конфигурации очищен")
     
     def reload_all(self):
-        """Принудительно перезагружает все конфигурационные файлы."""
+        """
+        Принудительно перезагружает все конфигурации.
+        """
         self.load_channels(force_reload=True)
         self.load_keywords(force_reload=True)
         logger.info("Все конфигурационные файлы перезагружены")
@@ -272,9 +283,13 @@ config_manager = ConfigManager()
 
 # Функции-обертки для обратной совместимости
 def load_channels() -> Dict[str, Any]:
-    """Загружает конфигурацию каналов (для обратной совместимости)."""
+    """
+    Глобальная функция для загрузки каналов через config_manager.
+    """
     return config_manager.load_channels()
 
 def load_keywords() -> list:
-    """Загружает ключевые слова (для обратной совместимости)."""
+    """
+    Глобальная функция для загрузки ключевых слов через config_manager.
+    """
     return config_manager.get_keywords_list() 

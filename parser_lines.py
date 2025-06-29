@@ -20,11 +20,15 @@ force_capture = False
 stop_monitoring = False
 
 def load_channels():
-    """Загрузка конфигурации каналов из JSON файла через config_manager."""
+    """
+    Загрузка конфигурации каналов из JSON файла через config_manager.
+    """
     return config_manager.load_channels()
 
 def parse_interval(interval_str):
-    """Парсит строку интервала (например, '1/7') и возвращает количество секунд."""
+    """
+    Парсит строку интервала (например, '1/7') и возвращает количество секунд.
+    """
     try:
         if not interval_str or '/' not in interval_str:
             logger.warning(f"Некорректный формат интервала: {interval_str}. Используется 10 секунд.")
@@ -39,7 +43,9 @@ def parse_interval(interval_str):
         return 10
 
 def capture_screenshot(channel_name, stream_url, output_dir, crop_params=None):
-    """Создание скриншота из видеопотока с использованием OpenCV."""
+    """
+    Создание скриншота из видеопотока с использованием OpenCV.
+    """
     try:
         # Формируем имя файла с текущей датой и временем
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
@@ -104,7 +110,9 @@ def capture_screenshot(channel_name, stream_url, output_dir, crop_params=None):
         return False
 
 def monitor_channel(channel_name, channel_info):
-    """Мониторинг отдельного канала."""
+    """
+    Мониторинг отдельного канала.
+    """
     global force_capture, stop_monitoring
     try:
         # Получаем URL потока из конфигурации
@@ -163,19 +171,25 @@ def monitor_channel(channel_name, channel_info):
         logger.info(f"Мониторинг канала {channel_name} завершен")
 
 def start_force_capture():
-    """Запускает принудительный захват скриншотов для всех каналов."""
+    """
+    Запускает принудительный захват скриншотов для всех каналов.
+    """
     global force_capture
     force_capture = True
     logger.info("Запущен принудительный захват скриншотов")
 
 def stop_force_capture():
-    """Останавливает принудительный захват скриншотов."""
+    """
+    Останавливает принудительный захват скриншотов.
+    """
     global force_capture
     force_capture = False
     logger.info("Остановлен принудительный захват скриншотов")
 
 def stop_subprocesses():
-    """Останавливает все потоки мониторинга."""
+    """
+    Останавливает все потоки мониторинга.
+    """
     global stop_monitoring
     stop_monitoring = True
     logger.info("Остановка всех потоков мониторинга")
@@ -196,7 +210,9 @@ def stop_subprocesses():
     logger.info("Все потоки мониторинга остановлены")
 
 def main():
-    """Основная функция мониторинга."""
+    """
+    Основная функция мониторинга.
+    """
     try:
         # Загружаем конфигурацию каналов
         channels = load_channels()

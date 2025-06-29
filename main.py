@@ -48,7 +48,14 @@ def get_logs_dir():
     return logs_dir
 
 class MonitoringApp:
+    """
+    Основной класс приложения для мониторинга и обработки бегущих строк с телеканалов.
+    Управляет UI, планировщиком, обработкой скриншотов и видео, отправкой в Telegram.
+    """
     def __init__(self):
+        """
+        Инициализация приложения, запуск потоков, UI, менеджера RBK/MIR24 и кэша.
+        """
         self.logger = logger
         self.loop = None
         self.thread = None
@@ -81,7 +88,9 @@ class MonitoringApp:
         self.hf_cache_max_size = 1000  # Максимальное количество кэшированных результатов
 
     def start_status_server(self):
-        """Запускает HTTP-сервер для получения статусов от дочерних процессов."""
+        """
+        Запускает HTTP-сервер для получения статусов от дочерних процессов.
+        """
         def create_handler(*args, **kwargs):
             return StatusHandler(self.ui, *args, **kwargs)
 
@@ -95,23 +104,33 @@ class MonitoringApp:
             logger.error(f"Не удалось запустить HTTP-сервер: {e}")
 
     def start_rbk_mir24(self):
-        """Запуск мониторинга RBK и MIR24 (ручной запуск)."""
+        """
+        Запуск мониторинга RBK и MIR24 (ручной запуск).
+        """
         self.rbk_mir24_manager.start_manual_recording()
 
     def stop_rbk_mir24(self):
-        """Остановка мониторинга RBK и MIR24."""
+        """
+        Остановка мониторинга RBK и MIR24.
+        """
         self.rbk_mir24_manager.stop_recording()
 
     def start_lines_monitoring(self):
-        """Запуск мониторинга строк по кнопке."""
+        """
+        Запуск мониторинга строк по кнопке.
+        """
         self.rbk_mir24_manager.start_lines_monitoring()
 
     def stop_lines_monitoring(self):
-        """Остановка мониторинга строк."""
+        """
+        Остановка мониторинга строк.
+        """
         self.rbk_mir24_manager.stop_lines_monitoring()
 
     def save_and_send_lines(self):
-        """Запускает полный цикл проверки скриншотов, фильтрации и отправки в Telegram."""
+        """
+        Запускает полный цикл проверки скриншотов, фильтрации и отправки в Telegram.
+        """
         try:
             self.ui.update_status("Начало обработки скриншотов...")
             self.ui.update_processing_status("Выполняется...")
@@ -126,7 +145,16 @@ class MonitoringApp:
             messagebox.showerror("Ошибка", f"Не удалось запустить обработку скриншотов: {e}")
 
     def fuzzy_keyword_match(self, text, keywords, threshold=0.8):
-        """Проверяет, есть ли в тексте слова, похожие на ключевые (fuzzy matching)."""
+        """
+        Проверяет, есть ли в тексте слова, похожие на ключевые (fuzzy matching).
+
+        Args:
+            text (str): Текст для поиска.
+            keywords (Iterable[str]): Список ключевых слов.
+            threshold (float): Порог схожести для SequenceMatcher.
+        Returns:
+            bool: True, если найдено похожее слово, иначе False.
+        """
         text = text.lower()
         for kw in keywords:
             if kw in text:
@@ -138,7 +166,9 @@ class MonitoringApp:
         return False
 
     def _save_and_send_lines_task(self):
-        """Задача для проверки, фильтрации и отправки скриншотов."""
+        """
+        Задача для проверки, фильтрации и отправки скриншотов.
+        """
         summary_title = "Результат обработки скриншотов"
         try:
             screenshots_dir = Path("screenshots")
@@ -250,7 +280,9 @@ class MonitoringApp:
             self.ui.root.after(0, self.ui.hide_progress)
 
     def _process_and_send_screenshots(self):
-        """Обработка и отправка скриншотов."""
+        """
+        Обработка и отправка скриншотов.
+        """
         try:
             # Останавливаем мониторинг
             self.stop_lines_monitoring()
@@ -265,7 +297,9 @@ class MonitoringApp:
             self.ui.update_processing_status(f"Ошибка: {str(e)}")
 
     def _send_daily_file_to_telegram(self):
-        """Отправка ежедневного файла в Telegram."""
+        """
+        Отправка ежедневного файла в Telegram.
+        """
         try:
             file_path = get_daily_file_path()
             if os.path.exists(file_path):
@@ -286,7 +320,9 @@ class MonitoringApp:
             self.ui.update_status(f"Ошибка отправки ежедневного файла: {str(e)}")
 
     def _send_daily_sent_texts_to_telegram(self):
-        """Отправка файла с текстами отправленных скриншотов за день в Telegram."""
+        """
+        Отправка файла с текстами отправленных скриншотов за день в Telegram.
+        """
         try:
             today_str = datetime.now().strftime('%Y%m%d')
             sent_texts_file = Path(f'sent_texts_{today_str}.txt')
@@ -307,7 +343,9 @@ class MonitoringApp:
             self.ui.update_status(f"Ошибка отправки файла с текстами скриншотов за день: {str(e)}")
 
     def _check_and_send_new_files(self):
-        """Проверка и отправка новых файлов."""
+        """
+        Проверка и отправка новых файлов.
+        """
         try:
             # Проверяем новые скриншоты
             screenshots_dir = Path("screenshots")
@@ -337,7 +375,9 @@ class MonitoringApp:
             logger.error(f"Ошибка при проверке новых файлов: {e}")
 
     def check_and_send_videos(self):
-        """Запускает полный цикл проверки crop-видео и отправки в Telegram."""
+        """
+        Запускает полный цикл проверки crop-видео и отправки в Telegram.
+        """
         if self.video_recognition_running:
             messagebox.showwarning("Предупреждение", "Проверка crop-видео уже запущена.")
             return
@@ -360,7 +400,9 @@ class MonitoringApp:
             messagebox.showerror("Ошибка", f"Не удалось запустить процесс: {e}")
 
     def _run_check_and_send_task(self):
-        """Задача, выполняющая распознавание, поиск и отправку crop-видео."""
+        """
+        Задача, выполняющая распознавание, поиск и отправку crop-видео.
+        """
         summary_title = "Результат проверки crop-видео"
         try:
             # Проверяем только папку lines_video (crop видео)
@@ -440,7 +482,9 @@ class MonitoringApp:
             self.ui.root.after(0, self.ui.update_video_check_status, "Завершено")
 
     def _recognize_text_in_videos_to_channel_txt(self, video_dir):
-        """Распознаёт текст из всех crop-видеофайлов и сохраняет результаты в отдельные txt по каналам."""
+        """
+        Распознаёт текст из всех crop-видеофайлов и сохраняет результаты в отдельные txt по каналам.
+        """
         recognized_dir = Path("recognized_text")
         
         # Создание директории recognized_text если она не существует
@@ -506,7 +550,9 @@ class MonitoringApp:
                 logger.error(f"Ошибка при закрытии файла: {e}")
 
     def _get_videos_with_keywords_hf_channelwise(self):
-        """Проверяет recognized_text/<channel>.txt на наличие ключевых слов и их вариаций через Hugging Face API."""
+        """
+        Возвращает список crop-видео с найденными ключевыми словами (через Hugging Face).
+        """
         recognized_dir = Path("recognized_text")
         
         # Проверка существования директории recognized_text
@@ -548,7 +594,9 @@ class MonitoringApp:
         return videos_to_send
 
     def _remove_video_text_from_channel_txt(self, video_file_name, channel_name):
-        """Удаляет строку из recognized_text/<channel>.txt по имени видеофайла."""
+        """
+        Удаляет строку из recognized_text/<channel>.txt по имени видеофайла.
+        """
         recognized_dir = Path("recognized_text")
         
         # Проверка существования директории recognized_text
@@ -578,7 +626,9 @@ class MonitoringApp:
             logger.error(f"Ошибка при удалении строки для видео {video_file_name} из {txt_path}: {e}")
 
     def _cleanup_recognized_texts_channelwise(self):
-        """Удаляет все recognized_text/<channel>.txt файлы."""
+        """
+        Удаляет все recognized_text/<channel>.txt файлы.
+        """
         recognized_dir = Path("recognized_text")
         
         # Проверка существования директории recognized_text
@@ -598,7 +648,9 @@ class MonitoringApp:
                 logger.error(f"Ошибка при удалении файла {txt_path}: {e}")
 
     def _cleanup_video_files(self):
-        """Удаляет все видеофайлы из папки lines_video."""
+        """
+        Удаляет все видеофайлы из папки lines_video.
+        """
         lines_video_dir = Path("lines_video")
         
         # Проверка существования директории lines_video
@@ -625,7 +677,9 @@ class MonitoringApp:
         logger.info(f"Очистка видеофайлов завершена. Удалено файлов: {deleted_count}")
 
     def cleanup(self):
-        """Очистка ресурсов при закрытии приложения."""
+        """
+        Очистка ресурсов при закрытии приложения.
+        """
         try:
             logger.info("Начало очистки ресурсов...")
             
@@ -662,7 +716,9 @@ class MonitoringApp:
             logger.error(f"Ошибка при очистке ресурсов: {e}")
 
     def start_scheduler(self):
-        """Запуск планировщика задач."""
+        """
+        Запуск планировщика задач.
+        """
         if not self.scheduler_running:
             self.scheduler_running = True
             self.scheduler_thread = threading.Thread(
@@ -673,6 +729,9 @@ class MonitoringApp:
             logger.info("Планировщик задач запущен")
 
     def _run_scheduler(self):
+        """
+        Основной цикл планировщика задач.
+        """
         logger.info("Настройка расписания задач...")
         self._setup_schedule()
         logger.info("Расписание настроено, начинаем выполнение...")
@@ -696,6 +755,9 @@ class MonitoringApp:
                 self.ui.update_scheduler_status(f"Ошибка: {str(e)}")
 
     def _setup_schedule(self):
+        """
+        Настройка расписания задач для всех каналов.
+        """
         schedule.clear()
         
         # Загружаем конфигурацию каналов через config_manager
@@ -737,6 +799,9 @@ class MonitoringApp:
         logger.info("Добавлено расписание отправки sent_texts_YYYYMMDD.txt в Telegram: 23:00")
 
     def reload_scheduler(self):
+        """
+        Перезагрузка расписания задач.
+        """
         logger.info("Выполняется перезагрузка расписания...")
         # Очищаем кэш config_manager перед перезагрузкой
         config_manager.clear_cache()
@@ -745,10 +810,15 @@ class MonitoringApp:
         self.ui.update_scheduler_status("Перезагружено")
 
     def request_scheduler_reload(self):
-        """Установить флаг для перезагрузки расписания (можно вызывать из UI или внешнего события)."""
+        """
+        Установить флаг для перезагрузки расписания (можно вызывать из UI или внешнего события).
+        """
         self.scheduler_reload_requested = True
 
     def pause_scheduler(self):
+        """
+        Приостановить планировщик задач.
+        """
         if not self.scheduler_paused:
             self.scheduler_paused = True
             logger.info("Планировщик приостановлен.")
@@ -756,6 +826,9 @@ class MonitoringApp:
             self.ui.toggle_scheduler_buttons(paused=True)
 
     def resume_scheduler(self):
+        """
+        Возобновить планировщик задач.
+        """
         if self.scheduler_paused:
             self.scheduler_paused = False
             logger.info("Планировщик возобновлен.")
@@ -763,6 +836,9 @@ class MonitoringApp:
             self.ui.toggle_scheduler_buttons(paused=False)
 
     def _has_new_videos_in_lines_video(self):
+        """
+        Проверяет, есть ли новые видеофайлы в папке lines_video.
+        """
         video_dir = Path("lines_video")
         if not video_dir.exists():
             return False
@@ -774,11 +850,16 @@ class MonitoringApp:
         return False
 
     def start_video_processing(self):
-        """Запускает скрипт обработки видеосюжетов в отдельном потоке."""
+        """
+        Запускает скрипт обработки видеосюжетов в отдельном потоке (устаревшая функция).
+        """
         messagebox.showinfo("Информация", "Обработка полноценного видео больше не поддерживается. Используйте 'Проверка crop-видео' для обработки crop-роликов.")
         logger.info("Попытка запуска обработки полноценного видео - функция больше не поддерживается")
 
     def _extract_text_from_image(self, image_path):
+        """
+        Извлекает текст из изображения с помощью pytesseract.
+        """
         try:
             img = cv2.imread(str(image_path))
             if img is None:
@@ -791,10 +872,15 @@ class MonitoringApp:
             return ""
 
     def _load_keywords(self):
+        """
+        Загружает и приводит к нижнему регистру список ключевых слов.
+        """
         return set(word.lower() for word in config_manager.get_keywords_list())
 
     def _find_keywords_local(self, text, keywords):
-        """Улучшенная локальная проверка ключевых слов без использования API."""
+        """
+        Улучшенная локальная проверка ключевых слов без использования API.
+        """
         found = []
         text_lower = text.lower()
         
@@ -850,7 +936,9 @@ class MonitoringApp:
         return found
 
     def _find_keywords_hf(self, text, keywords):
-        """Использует Hugging Face Inference API для поиска ключевых слов в тексте одним запросом с кэшированием."""
+        """
+        Проверка ключевых слов через Hugging Face API с fallback на локальную.
+        """
         # Импортируем токен из telegram_sender
         try:
             from telegram_sender import HF_API_TOKEN
@@ -967,7 +1055,9 @@ Example responses:
         return found
     
     def _add_to_hf_cache(self, cache_key, result):
-        """Добавляет результат в кэш Hugging Face API с ограничением размера."""
+        """
+        Добавляет результат в кэш Hugging Face API с ограничением размера.
+        """
         # Если кэш переполнен, удаляем старые записи
         if len(self.hf_cache) >= self.hf_cache_max_size:
             # Удаляем 20% старых записей
@@ -980,44 +1070,62 @@ Example responses:
         logger.debug(f"Добавлен результат в кэш Hugging Face API, размер кэша: {len(self.hf_cache)}")
     
     def clear_hf_cache(self):
-        """Очищает кэш Hugging Face API."""
+        """
+        Очищает кэш Hugging Face API.
+        """
         self.hf_cache.clear()
         logger.info("Кэш Hugging Face API очищен")
 
     def _start_r1_monitoring(self):
-        """Запуск мониторинга строк для канала R1 по расписанию."""
+        """
+        Запуск мониторинга строк для канала R1 по расписанию.
+        """
         self.rbk_mir24_manager.start_scheduled_lines_monitoring(['R1'])
 
     def _start_zvezda_monitoring(self):
-        """Запуск мониторинга строк для канала Zvezda по расписанию."""
+        """
+        Запуск мониторинга строк для канала Zvezda по расписанию.
+        """
         self.rbk_mir24_manager.start_scheduled_lines_monitoring(['Zvezda'])
 
     def _start_other_channels_monitoring(self):
-        """Запуск мониторинга строк для других каналов по расписанию (TVC, RenTV, NTV)."""
+        """
+        Запуск мониторинга строк для других каналов по расписанию (TVC, RenTV, NTV).
+        """
         # Определяем канал из контекста планировщика
         # Поскольку этот метод используется для нескольких каналов, 
         # мы не можем точно определить канал, поэтому используем общий подход
         self.rbk_mir24_manager.start_scheduled_lines_monitoring()
 
     def _check_and_start_idle_monitoring(self):
-        """Заглушка для проверки и запуска idle-мониторинга (для планировщика)."""
+        """
+        Заглушка для проверки и запуска idle-мониторинга (для планировщика).
+        """
         logger.debug("Вызван _check_and_start_idle_monitoring (заглушка)")
         pass
 
     def _start_rbk_mir24_crop_recording(self):
-        """Запуск записи crop-видео для RBK и MIR24 по расписанию."""
+        """
+        Запуск записи crop-видео для RBK и MIR24 по расписанию.
+        """
         self.rbk_mir24_manager.start_scheduled_crop_recording(['RBK', 'MIR24'])
 
     def _start_rbk_mir24_lines_monitoring(self):
-        """Запуск мониторинга строк (скриншотов) для RBK и MIR24 по расписанию и автоматическая обработка после завершения."""
+        """
+        Запуск мониторинга строк (скриншотов) для RBK и MIR24 по расписанию и автоматическая обработка после завершения.
+        """
         self.rbk_mir24_manager.start_scheduled_lines_monitoring(['RBK', 'MIR24'])
 
     def _start_channel_lines_monitoring(self, channel):
-        """Запуск мониторинга строк (скриншотов) для указанного канала по расписанию и автоматическая обработка после завершения."""
+        """
+        Запуск мониторинга строк (скриншотов) для указанного канала по расписанию и автоматическая обработка после завершения.
+        """
         self.rbk_mir24_manager.start_scheduled_lines_monitoring([channel])
 
     def _cleanup_old_sent_texts(self):
-        """Удаляет устаревшие файлы sent_texts_YYYYMMDD.txt, кроме текущего дня."""
+        """
+        Удаляет устаревшие файлы sent_texts_YYYYMMDD.txt, кроме текущего дня.
+        """
         try:
             today_str = datetime.now().strftime('%Y%m%d')
             current_dir = Path('.')
@@ -1042,7 +1150,9 @@ Example responses:
             logger.error(f"Ошибка при очистке устаревших файлов sent_texts: {e}")
 
     def _send_single_video_to_telegram(self, video_path, channel_name, found_keywords):
-        """Отправляет одно видео в Telegram."""
+        """
+        Отправляет одно видео в Telegram.
+        """
         try:
             from telegram_sender import send_files
             caption = f"Канал: {channel_name}\nНайденные ключевые слова: {', '.join(found_keywords)}"
@@ -1066,11 +1176,20 @@ Example responses:
             return False
 
 class StatusHandler(BaseHTTPRequestHandler):
+    """
+    HTTP-обработчик для получения статусов от дочерних процессов и обновления UI.
+    """
     def __init__(self, ui_instance, *args, **kwargs):
+        """
+        Инициализация обработчика статусов.
+        """
         self.ui = ui_instance
         super().__init__(*args, **kwargs)
 
     def do_POST(self):
+        """
+        Обработка POST-запроса для обновления статуса в UI.
+        """
         try:
             content_length = int(self.headers['Content-Length'])
             post_data = self.rfile.read(content_length)
@@ -1089,6 +1208,9 @@ class StatusHandler(BaseHTTPRequestHandler):
             self.end_headers()
 
     def log_message(self, format, *args):
+        """
+        Подавляет логирование запросов в консоль.
+        """
         # Подавляем логирование запросов в консоль
         return
 

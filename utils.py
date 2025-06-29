@@ -8,7 +8,9 @@ logger = logging.getLogger(__name__)
 
 
 def setup_logging(log_filename='main_log.txt'):
-    """Настройка логирования с возможностью указать имя файла лога."""
+    """
+    Настройка логирования с возможностью указать имя файла лога.
+    """
     # Получаем путь к директории исполняемого файла
     if getattr(sys, 'frozen', False):
         # Если это исполняемый файл (PyInstaller)
@@ -38,7 +40,9 @@ def setup_logging(log_filename='main_log.txt'):
 
 
 def start_monitoring(app, ui, callback):
-    """Запуск мониторинга."""
+    """
+    Запуск мониторинга (асинхронная задача).
+    """
 
     async def process():
         logger.info("Запуск задачи мониторинга")
@@ -58,7 +62,9 @@ def start_monitoring(app, ui, callback):
 
 
 def stop_monitoring(app, ui):
-    """Остановка мониторинга."""
+    """
+    Остановка мониторинга (асинхронная задача).
+    """
 
     async def stop_process():
         logger.info("Остановка мониторинга")
@@ -74,7 +80,9 @@ def stop_monitoring(app, ui):
 
 
 def save_to_csv(app, ui, callback, send_files):
-    """Сохранение строк в CSV и отправка файлов."""
+    """
+    Сохраняет строки в CSV и отправляет файлы.
+    """
 
     async def process():
         logger.info("Запуск задачи сохранения в CSV")
@@ -92,7 +100,9 @@ def save_to_csv(app, ui, callback, send_files):
 
 
 def send_strings(app, ui, callback):
-    """Отправка строк в Telegram."""
+    """
+    Отправка строк в Telegram (асинхронная задача).
+    """
 
     async def process():
         logger.info("Запуск задачи отправки строк")
@@ -109,7 +119,9 @@ def send_strings(app, ui, callback):
 
 
 def run_async_task(app, coro_or_func):
-    """Запуск асинхронной задачи в цикле событий без блокировки UI."""
+    """
+    Запуск асинхронной задачи в цикле событий без блокировки UI.
+    """
     def wrapper():
         loop = app.ensure_loop()
         try:
@@ -122,10 +134,10 @@ def run_async_task(app, coro_or_func):
     return wrapper
 
 
-
-
 def start_runnable(func):
-    """Декоратор для логирования выполнения функции."""
+    """
+    Декоратор для логирования выполнения функции.
+    """
 
     @wraps(func)
     def wrapper(*args, **kwargs):
