@@ -8,6 +8,14 @@ import threading
 
 logger = logging.getLogger(__name__)
 
+def get_resource_path(filename, subdir=""):
+    import sys
+    if getattr(sys, 'frozen', False):
+        base_path = sys._MEIPASS
+    else:
+        base_path = os.path.abspath(".")
+    return os.path.join(base_path, subdir, filename)
+
 class ConfigManager:
     """
     Централизованный менеджер конфигурации для загрузки и кэширования
@@ -25,8 +33,8 @@ class ConfigManager:
         self._cache_duration = timedelta(seconds=30)  # Кэш на 30 секунд
         self._lock = threading.Lock()
         # Пути к файлам конфигурации
-        self.channels_file = Path('channels.json')
-        self.keywords_file = Path('keywords.json')
+        self.channels_file = Path(get_resource_path('channels.json'))
+        self.keywords_file = Path(get_resource_path('keywords.json'))
     
     def _get_file_modification_time(self, file_path: Path) -> Optional[datetime]:
         """

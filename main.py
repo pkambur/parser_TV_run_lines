@@ -34,19 +34,12 @@ from config_manager import config_manager
 # Инициализация логирования
 logger = setup_logging()
 
-def get_logs_dir():
-    """Получение пути к директории logs относительно исполняемого файла."""
+def get_resource_path(filename, subdir="bin"):
     if getattr(sys, 'frozen', False):
-        # Если это исполняемый файл (PyInstaller)
-        base_path = os.path.dirname(sys.executable)
+        base_path = sys._MEIPASS
     else:
-        # Если это скрипт Python
-        base_path = os.path.dirname(os.path.abspath(__file__))
-    
-    logs_dir = os.path.join(base_path, 'logs')
-    # Создаем директорию logs, если она не существует
-    os.makedirs(logs_dir, exist_ok=True)
-    return logs_dir
+        base_path = os.path.abspath(".")
+    return os.path.join(base_path, subdir, filename)
 
 class MonitoringApp:
     """
@@ -95,6 +88,10 @@ class MonitoringApp:
         self._start_resource_monitor_thread()
         self._start_hf_cache_cleaner_thread()
         self._start_temp_files_cleaner_thread()
+
+        # В функции, где используется pytesseract:
+        pytesseract.pytesseract.tesseract_cmd = get_resource_path("tesseract.exe")
+        pytesseract.pytesseract.tessdata_dir_config = f'--tessdata-dir "{get_resource_path("tessdata")}"'
 
     def start_status_server(self):
         """
@@ -1215,7 +1212,7 @@ Example responses:
                 temp_file = os.path.join(temp_dir, f"frag_{idx}.mp4")
                 duration = end - start
                 cmd = [
-                    "ffmpeg", "-y", "-i", str(video_path),
+                    get_resource_path("ffmpeg.exe"), "-y", "-i", str(video_path),
                     "-ss", str(start), "-t", str(duration),
                     "-c", "copy", temp_file
                 ]
@@ -1234,7 +1231,7 @@ Example responses:
                     f.write(f"file '{temp_file}'\n")
             # Склеиваем
             cmd_concat = [
-                "ffmpeg", "-y", "-f", "concat", "-safe", "0", "-i", concat_list,
+                get_resource_path("ffmpeg.exe"), "-y", "-f", "concat", "-safe", "0", "-i", concat_list,
                 "-c", "copy", str(output_path)
             ]
             result = subprocess.run(cmd_concat, stdout=subprocess.PIPE, stderr=subprocess.PIPE)

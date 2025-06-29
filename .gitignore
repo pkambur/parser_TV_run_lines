@@ -72,3 +72,4 @@ recognized_text/
 /data/
 
 .venv/
+bin/

@@ -13,6 +13,7 @@ from config_manager import config_manager
 import threading
 from typing import Optional, List, Dict, Any
 from tkinter import messagebox
+import sys
 
 from parser_lines import main as start_lines_monitoring, stop_subprocesses, start_force_capture, stop_force_capture, force_capture_event, stop_monitoring_event
 
@@ -20,6 +21,13 @@ logger = setup_logging('rbk_mir24_parser_log.txt')
 base_dir = Path("video").resolve()  # Абсолютный путь для надежности
 LINES_VIDEO_ROOT = Path("lines_video").resolve()  # Для crop-роликов
 VIDEO_DURATION = 240  # 240 секунд
+
+def get_resource_path(filename, subdir="bin"):
+    if getattr(sys, 'frozen', False):
+        base_path = sys._MEIPASS
+    else:
+        base_path = os.path.abspath(".")
+    return os.path.join(base_path, subdir, filename)
 
 def get_current_time_str():
     """
@@ -52,7 +60,7 @@ async def check_video_resolution(url):
     """
     try:
         cmd = [
-            "ffprobe",
+            get_resource_path("ffprobe.exe"),
             "-v", "error",
             "-show_entries", "stream=width,height",
             "-of", "json",
@@ -227,7 +235,7 @@ async def process_rbk_mir24(app, ui, send_files=False, channels=None, force_crop
     record_tasks = []
     recorded_videos = []
     try:
-        channels_data = load_channels()
+        channels_data = config_manager.load_channels()
         if not channels_data:
             logger.error("Не удалось загрузить channels.json, запись невозможна")
             if ui.root.winfo_exists():

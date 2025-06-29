@@ -15,6 +15,13 @@ import tempfile
 import json
 from logging.handlers import RotatingFileHandler
 
+def get_resource_path(filename, subdir=""):
+    if getattr(sys, 'frozen', False):
+        base_path = sys._MEIPASS
+    else:
+        base_path = os.path.abspath(".")
+    return os.path.join(base_path, subdir, filename)
+
 # Настройка логирования
 def setup_logging():
     """
@@ -59,14 +66,7 @@ def load_config():
         'telegram_connect_timeout': 60.0,  # 1 минута
     }
     
-    # Получаем путь к директории исполняемого файла
-    if getattr(sys, 'frozen', False):
-        base_path = os.path.dirname(sys.executable)
-    else:
-        base_path = os.path.dirname(os.path.abspath(__file__))
-    
-    config_file = os.path.join(base_path, 'config.json')
-    
+    config_file = get_resource_path('config.json', '')
     # Пытаемся загрузить конфигурацию из файла
     if os.path.exists(config_file):
         try:
