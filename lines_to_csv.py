@@ -174,9 +174,15 @@ def is_readable_text(text: str, image_path: str) -> bool:
     Проверка читаемости текста. Использует локальную проверку,
     так как Hugging Face API для анализа изображений требует специальных моделей.
     """
+    # Импортируем токен из telegram_sender
+    try:
+        from telegram_sender import HF_TOKEN
+    except ImportError:
+        # Fallback к переменной окружения
+        HF_TOKEN = os.getenv('HF_TOKEN')
+    
     # Проверка существования токена HF_TOKEN
-    hf_token = os.getenv('HF_TOKEN')
-    if not hf_token:
+    if not HF_TOKEN:
         logger.info("HF_TOKEN не найден в переменных окружения, используется локальная проверка")
         return is_readable_text_local(text)
     

@@ -1,3 +1,18 @@
+# Конфигурационные файлы с чувствительными данными
+config.json
+.env
+.env.local
+.env.production
+
+# Логи
+logs/
+*.log
+
+# Временные файлы
+temp/
+tmp/
+*.tmp
+
 # Python
 __pycache__/
 *.py[cod]
@@ -20,27 +35,26 @@ wheels/
 .installed.cfg
 *.egg
 
-# Virtual Environment
-.env
-.venv
-env/
+# Виртуальные окружения
 venv/
+env/
 ENV/
 
 # IDE
-.idea/
 .vscode/
+.idea/
 *.swp
 *.swo
+
+# Системные файлы
 .DS_Store
+Thumbs.db
 
 # Project specific
 screenshots/
 screenshots_processed/
 video/
 recognized_text/
-logs/
-*.log
 *.xlsx
 *.csv
 *.mp4
@@ -48,7 +62,6 @@ logs/
 *.mkv
 
 # Игнорировать бинарные и временные файлы
-*.tmp
 *.pyd
 *.dll
 *.h5
@@ -58,4 +71,4 @@ logs/
 /models/
 /data/
 
-парсер скринов.txt 
+.venv/

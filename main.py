@@ -949,7 +949,12 @@ class MonitoringApp:
 
     def _find_keywords_hf(self, text, keywords):
         """Использует Hugging Face Inference API для поиска ключевых слов в тексте одним запросом с кэшированием."""
-        HF_API_TOKEN = os.environ.get("HF_API_TOKEN")  # Токен должен быть в переменных окружения
+        # Импортируем токен из telegram_sender
+        try:
+            from telegram_sender import HF_API_TOKEN
+        except ImportError:
+            # Fallback к переменной окружения
+            HF_API_TOKEN = os.environ.get("HF_API_TOKEN")
         
         # Проверка существования токена HF_API_TOKEN
         if not HF_API_TOKEN:
