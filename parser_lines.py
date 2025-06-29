@@ -16,6 +16,7 @@ logger = setup_logging('parser_lines_log.txt')
 
 # Глобальные переменные для управления мониторингом
 monitoring_threads = []
+monitoring_threads_lock = threading.Lock()
 force_capture_event = threading.Event()
 stop_monitoring_event = threading.Event()
 
@@ -190,22 +191,21 @@ def stop_subprocesses():
     stop_monitoring_event.set()
     logger.info("Остановка всех потоков мониторинга")
     logger.info(f"Всего потоков для join: {len(monitoring_threads)}")
-    for thread in monitoring_threads:
-        logger.info(f"Ожидание завершения потока: {thread.name}, is_alive={thread.is_alive()}")
-        if thread.is_alive():
-            try:
-                thread.join(timeout=5.0)
-                if thread.is_alive():
-                    logger.warning(f"Поток {thread.name} не завершился за timeout! Возможно, он завис.")
-                else:
-                    logger.info(f"Поток {thread.name} успешно завершён.")
-            except Exception as e:
-                logger.error(f"Ошибка при остановке потока {thread.name}: {e}")
-        else:
-            logger.info(f"Поток {thread.name} уже завершён.")
-    # Очищаем список потоков
-    monitoring_threads.clear()
-    # Сбрасываем флаг остановки
+    with monitoring_threads_lock:
+        for thread in monitoring_threads:
+            logger.info(f"Ожидание завершения потока: {thread.name}, is_alive={thread.is_alive()}")
+            if thread.is_alive():
+                try:
+                    thread.join(timeout=5.0)
+                    if thread.is_alive():
+                        logger.warning(f"Поток {thread.name} не завершился за timeout! Возможно, он завис.")
+                    else:
+                        logger.info(f"Поток {thread.name} успешно завершён.")
+                except Exception as e:
+                    logger.error(f"Ошибка при остановке потока {thread.name}: {e}")
+            else:
+                logger.info(f"Поток {thread.name} уже завершён.")
+        monitoring_threads.clear()
     stop_monitoring_event.clear()
     logger.info("Все потоки мониторинга остановлены")
 
@@ -227,30 +227,28 @@ def main():
         ]
 
         # Запускаем мониторинг только для каналов скриншотов
-        for channel_name, channel_info in channels.items():
-            if channel_name not in screenshot_channels:
-                logger.info(f"Пропуск канала {channel_name} (не в списке каналов для скриншотов)")
-                continue
-
-            # Проверяем наличие URL
-            if not channel_info.get('url'):
-                logger.error(f"Пропуск канала {channel_name}: не указан URL потока")
-                continue
-                
-            # Создаем и запускаем поток для канала
-            thread = threading.Thread(
-                target=monitor_channel,
-                args=(channel_name, channel_info),
-                name=f"monitor_{channel_name}"
-            )
-            thread.daemon = True
-            thread.start()
-            monitoring_threads.append(thread)
-            logger.info(f"Запущен мониторинг канала {channel_name}")
+        with monitoring_threads_lock:
+            for channel_name, channel_info in channels.items():
+                if channel_name not in screenshot_channels:
+                    logger.info(f"Пропуск канала {channel_name} (не в списке каналов для скриншотов)")
+                    continue
+                if not channel_info.get('url'):
+                    logger.error(f"Пропуск канала {channel_name}: не указан URL потока")
+                    continue
+                thread = threading.Thread(
+                    target=monitor_channel,
+                    args=(channel_name, channel_info),
+                    name=f"monitor_{channel_name}"
+                )
+                thread.daemon = True
+                thread.start()
+                monitoring_threads.append(thread)
+                logger.info(f"Запущен мониторинг канала {channel_name}")
 
         # Ждем завершения всех потоков
-        for thread in monitoring_threads:
-            thread.join()
+        with monitoring_threads_lock:
+            for thread in monitoring_threads:
+                thread.join()
 
     except KeyboardInterrupt:
         logger.info("Получен сигнал завершения работы")

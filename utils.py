@@ -4,13 +4,14 @@ import os
 import sys
 from functools import wraps
 import threading
+from logging.handlers import RotatingFileHandler
 
 logger = logging.getLogger(__name__)
 
 
 def setup_logging(log_filename='main_log.txt'):
     """
-    Настройка логирования с возможностью указать имя файла лога.
+    Настройка логирования с возможностью указать имя файла лога и ротацией.
     """
     # Получаем путь к директории исполняемого файла
     if getattr(sys, 'frozen', False):
@@ -29,15 +30,15 @@ def setup_logging(log_filename='main_log.txt'):
     # Путь к файлу лога
     log_file = os.path.join(logs_dir, log_filename)
     
-    logging.basicConfig(
-        level=logging.INFO,
-        format='%(asctime)s - %(levelname)s - %(name)s - %(message)s',
-        handlers=[
-            logging.FileHandler(log_file, encoding='utf-8'),
-            logging.StreamHandler()
-        ]
-    )
-    return logging.getLogger(__name__)
+    logger.setLevel(logging.INFO)
+    # Удаляем все старые хендлеры
+    logger.handlers.clear()
+    handler = RotatingFileHandler(log_file, maxBytes=5*1024*1024, backupCount=3, encoding='utf-8')
+    formatter = logging.Formatter('%(asctime)s - %(levelname)s - %(name)s - %(message)s')
+    handler.setFormatter(formatter)
+    logger.addHandler(handler)
+    logger.addHandler(logging.StreamHandler())
+    return logger
 
 
 def start_monitoring(app, ui, callback):

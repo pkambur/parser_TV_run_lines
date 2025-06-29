@@ -13,6 +13,7 @@ import datetime
 from pathlib import Path
 from config_manager import config_manager
 import re
+from logging.handlers import RotatingFileHandler
 
 logger = setup_logging('ui_log.txt')
 

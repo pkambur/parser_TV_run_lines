@@ -13,38 +13,31 @@ from pathlib import Path
 import cv2
 import tempfile
 import json
+from logging.handlers import RotatingFileHandler
 
 # Настройка логирования
 def setup_logging():
     """
-    Настройка логирования для telegram_sender.
+    Настройка логирования для telegram_sender с ротацией логов.
     """
     # Получаем путь к директории исполняемого файла
     if getattr(sys, 'frozen', False):
-        # Если это исполняемый файл (PyInstaller)
         base_path = os.path.dirname(sys.executable)
     else:
-        # Если это скрипт Python
         base_path = os.path.dirname(os.path.abspath(__file__))
-    
-    # Создаем путь к директории logs относительно исполняемого файла
     logs_dir = os.path.join(base_path, 'logs')
-    
-    # Создаем директорию logs, если она не существует
     os.makedirs(logs_dir, exist_ok=True)
-    
-    # Путь к файлу лога
     log_file = os.path.join(logs_dir, 'telegram_sender_log.log')
-    
-    logging.basicConfig(
-        level=logging.INFO,
-        format='%(asctime)s - %(levelname)s - %(message)s',
-        handlers=[
-            logging.FileHandler(log_file),
-            logging.StreamHandler()
-        ]
-    )
-    return logging.getLogger(__name__)
+    logger = logging.getLogger(__name__)
+    logger.setLevel(logging.INFO)
+    # Удаляем все старые хендлеры
+    logger.handlers.clear()
+    handler = RotatingFileHandler(log_file, maxBytes=5*1024*1024, backupCount=3, encoding='utf-8')
+    formatter = logging.Formatter('%(asctime)s - %(levelname)s - %(message)s')
+    handler.setFormatter(formatter)
+    logger.addHandler(handler)
+    logger.addHandler(logging.StreamHandler())
+    return logger
 
 logger = setup_logging()
 

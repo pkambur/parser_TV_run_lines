@@ -22,6 +22,7 @@ import pytesseract
 from difflib import SequenceMatcher
 import requests
 from glob import glob
+import psutil
 
 from UI import MonitoringUI
 from rbk_mir24_parser import VIDEO_DURATION, RBKMIR24Manager
@@ -88,6 +89,12 @@ class MonitoringApp:
         self.hf_cache = {}
         self.hf_cache_lock = threading.Lock()
         self.hf_cache_max_size = 1000  # Максимальное количество кэшированных результатов
+        self._monitoring_threads_lock = threading.Lock()
+        self._start_watchdog_thread()
+        self._start_heartbeat_thread()
+        self._start_resource_monitor_thread()
+        self._start_hf_cache_cleaner_thread()
+        self._start_temp_files_cleaner_thread()
 
     def start_status_server(self):
         """
@@ -1319,6 +1326,80 @@ Example responses:
                         logger.error(f"Ошибка при удалении файла {file}: {e}")
         except Exception as e:
             logger.error(f"Ошибка при очистке папки lines_video/{channel_name}: {e}")
+
+    def _start_watchdog_thread(self):
+        def watchdog():
+            while True:
+                try:
+                    with self._monitoring_threads_lock:
+                        for thread in list(getattr(self, 'monitoring_threads', [])):
+                            if not thread.is_alive():
+                                logger.warning(f"Watchdog: Поток {thread.name} не отвечает!")
+                    time_module.sleep(60)
+                except Exception as e:
+                    logger.error(f"Watchdog error: {e}")
+        threading.Thread(target=watchdog, daemon=True).start()
+
+    def _start_heartbeat_thread(self):
+        def heartbeat():
+            while True:
+                logger.info("Heartbeat: приложение работает")
+                time_module.sleep(300)
+        threading.Thread(target=heartbeat, daemon=True).start()
+
+    def _start_resource_monitor_thread(self):
+        def resource_monitor():
+            while True:
+                try:
+                    mem = psutil.virtual_memory()
+                    disk = psutil.disk_usage('.')
+                    if mem.percent > 85:
+                        logger.warning(f"Использование памяти: {mem.percent}%")
+                    if disk.percent > 90:
+                        logger.warning(f"Использование диска: {disk.percent}%")
+                    time_module.sleep(120)
+                except Exception as e:
+                    logger.error(f"Resource monitor error: {e}")
+        threading.Thread(target=resource_monitor, daemon=True).start()
+
+    def _start_hf_cache_cleaner_thread(self):
+        def cache_cleaner():
+            while True:
+                try:
+                    self.clear_hf_cache()
+                    logger.info("Плановая очистка кэша Hugging Face API")
+                    time_module.sleep(3600)
+                except Exception as e:
+                    logger.error(f"HF cache cleaner error: {e}")
+        threading.Thread(target=cache_cleaner, daemon=True).start()
+
+    def _start_temp_files_cleaner_thread(self):
+        def temp_cleaner():
+            while True:
+                try:
+                    self._cleanup_temp_files()
+                    time_module.sleep(86400)
+                except Exception as e:
+                    logger.error(f"Temp files cleaner error: {e}")
+        threading.Thread(target=temp_cleaner, daemon=True).start()
+
+    def _cleanup_temp_files(self):
+        # Удаляет старые временные файлы (скриншоты, видео, recognized_text)
+        try:
+            now = datetime.now().timestamp()
+            folders = [Path('screenshots'), Path('screenshots_processed'), Path('video'), Path('lines_video'), Path('recognized_text')]
+            for folder in folders:
+                if folder.exists() and folder.is_dir():
+                    for file in folder.rglob('*'):
+                        if file.is_file():
+                            try:
+                                if now - file.stat().st_mtime > 3*86400:  # старше 3 дней
+                                    file.unlink()
+                                    logger.info(f"Удалён устаревший временный файл: {file}")
+                            except Exception as e:
+                                logger.error(f"Ошибка удаления временного файла {file}: {e}")
+        except Exception as e:
+            logger.error(f"Ошибка при очистке временных файлов: {e}")
 
 class StatusHandler(BaseHTTPRequestHandler):
     """

@@ -16,10 +16,18 @@ import numpy as np
 from collections import Counter
 from config_manager import config_manager
 import threading
+from logging.handlers import RotatingFileHandler
 
-# Настройка логирования
-logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
+# Настройка логирования с ротацией
+log_file = 'lines_to_csv.log'
+log_handler = RotatingFileHandler(log_file, maxBytes=5*1024*1024, backupCount=3, encoding='utf-8')
+log_formatter = logging.Formatter('%(asctime)s - %(levelname)s - %(message)s')
+log_handler.setFormatter(log_formatter)
 logger = logging.getLogger(__name__)
+logger.setLevel(logging.INFO)
+if not logger.hasHandlers():
+    logger.addHandler(log_handler)
+    logger.addHandler(logging.StreamHandler())
 
 class TextDuplicateChecker:
     """
