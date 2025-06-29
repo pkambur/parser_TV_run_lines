@@ -24,9 +24,8 @@ import requests
 from glob import glob
 
 from UI import MonitoringUI
-from rbk_mir24_parser import process_rbk_mir24, stop_rbk_mir24, VIDEO_DURATION
+from rbk_mir24_parser import VIDEO_DURATION, RBKMIR24Manager
 from utils import setup_logging
-from parser_lines import main as start_lines_monitoring, stop_subprocesses, start_force_capture, stop_force_capture
 from lines_to_csv import process_screenshots, get_daily_file_path
 from telegram_sender import send_files, send_report_files
 from config_manager import config_manager
@@ -59,12 +58,7 @@ class MonitoringApp:
         self.scheduler_paused = False
         self.start_time = time_module.time()
         self.last_lines_activity_time = self.start_time
-        self.rbk_mir24_task = None
-        self.rbk_mir24_running = False
         self.process_list = []
-        self.recording_channels = []
-        self.lines_monitoring_thread = None
-        self.lines_monitoring_running = False
         self.video_recognition_running = False
         self.loop = asyncio.new_event_loop()
         asyncio.set_event_loop(self.loop)
@@ -74,6 +68,10 @@ class MonitoringApp:
         )
         self.thread.start()
         self.ui = MonitoringUI(self)
+        
+        # Инициализируем менеджер RBK и MIR24
+        self.rbk_mir24_manager = RBKMIR24Manager(self, self.ui)
+        
         self.start_status_server()
         self.start_scheduler()
         self._cleanup_old_sent_texts()
@@ -98,107 +96,19 @@ class MonitoringApp:
 
     def start_rbk_mir24(self):
         """Запуск мониторинга RBK и MIR24 (ручной запуск)."""
-        try:
-            from rbk_mir24_parser import get_current_time_str, process_rbk_mir24
-            now_str = get_current_time_str()
-            channels_data = config_manager.load_channels()
-            video_channels = ['RBK', 'MIR24', 'RenTV', 'NTV', 'TVC']
-            channels_in_lines = []
-            for name in video_channels:
-                info = channels_data.get(name)
-                if not info:
-                    continue
-                lines_times = set(info.get("lines", []))
-                if now_str in lines_times:
-                    channels_in_lines.append(name)
-            if channels_in_lines:
-                import tkinter
-                messagebox.showwarning(
-                    "Бегущие строки",
-                    f"Бегущие строки уже записываются на канале(ах): {', '.join(channels_in_lines)}"
-                )
-                return
-            # Если нет совпадений с lines, запускаем crop-запись
-            self.recording_channels.clear()
-            self.recording_channels.extend(video_channels)
-            for channel in video_channels:
-                self.ui.update_recording_status(channel, True)
-            self.process_list.clear()
-            self.ui.update_status("Запуск записи RBK и MIR24 (crop)...")
-            self.rbk_mir24_task = asyncio.run_coroutine_threadsafe(
-                process_rbk_mir24(self, self.ui, True, channels=video_channels, force_crop=True),
-                self.loop
-            )
-            self.ui.update_rbk_mir24_status("Запущен")
-            logger.info("Запущен мониторинг RBK и MIR24 (crop)")
-        except Exception as e:
-            self.ui.update_rbk_mir24_status("Ошибка")
-            self.ui.update_status(f"Ошибка запуска записи: {str(e)}")
-            logger.error(f"Ошибка при запуске записи RBK и MIR24: {e}")
-            messagebox.showerror("Ошибка", f"Не удалось запустить запись: {str(e)}")
+        self.rbk_mir24_manager.start_manual_recording()
 
     def stop_rbk_mir24(self):
         """Остановка мониторинга RBK и MIR24."""
-        if self.rbk_mir24_running and self.loop is not None:
-            try:
-                for channel in self.recording_channels:
-                    self.ui.update_recording_status(channel, False)
-                self.recording_channels.clear()
-                self.rbk_mir24_running = False
-                self.ui.update_status("Остановка записи RBK и MIR24...")
-                
-                # Останавливаем задачу
-                asyncio.run_coroutine_threadsafe(
-                    stop_rbk_mir24(self, self.ui),
-                    self.loop
-                )
-                
-                self.ui.update_rbk_mir24_status("Остановлен")
-                logger.info("Остановлен мониторинг RBK и MIR24")
-            except Exception as e:
-                self.ui.update_status(f"Ошибка остановки записи: {str(e)}")
-                logger.error(f"Ошибка при остановке записи RBK и MIR24: {e}")
-                messagebox.showerror("Ошибка", f"Не удалось остановить запись: {str(e)}")
-        else:
-            messagebox.showwarning("Предупреждение", "Мониторинг RBK и MIR24 уже остановлен или event loop не инициализирован")
+        self.rbk_mir24_manager.stop_recording()
 
     def start_lines_monitoring(self):
         """Запуск мониторинга строк по кнопке."""
-        if not self.lines_monitoring_running:
-            try:
-                self.lines_monitoring_running = True
-                self.last_lines_activity_time = time_module.time()
-                start_force_capture()
-                self.lines_monitoring_thread = threading.Thread(
-                    target=start_lines_monitoring,
-                    daemon=True
-                )
-                self.lines_monitoring_thread.start()
-                self.ui.update_lines_status("Запущен")
-                logger.info("Запущен мониторинг строк по кнопке")
-            except Exception as e:
-                logger.error(f"Ошибка при запуске мониторинга по кнопке: {e}")
-                self.lines_monitoring_running = False
-                messagebox.showerror("Ошибка", f"Не удалось запустить мониторинг: {e}")
-        else:
-            logger.warning("Мониторинг уже запущен")
-            messagebox.showwarning("Предупреждение", "Мониторинг строк уже запущен")
+        self.rbk_mir24_manager.start_lines_monitoring()
 
     def stop_lines_monitoring(self):
         """Остановка мониторинга строк."""
-        if self.lines_monitoring_running:
-            self.lines_monitoring_running = False
-            stop_force_capture()
-            stop_subprocesses()
-            if self.lines_monitoring_thread and self.lines_monitoring_thread.is_alive():
-                self.lines_monitoring_thread.join(timeout=5.0)
-            if hasattr(self, 'check_files_thread') and self.check_files_thread.is_alive():
-                self.check_files_thread.join(timeout=5.0)
-            self.lines_monitoring_thread = None
-            self.ui.update_lines_status("Остановлен")
-            logger.info("Остановлен мониторинг строк")
-        else:
-            messagebox.showwarning("Предупреждение", "Мониторинг строк уже остановлен")
+        self.rbk_mir24_manager.stop_lines_monitoring()
 
     def save_and_send_lines(self):
         """Запускает полный цикл проверки скриншотов, фильтрации и отправки в Telegram."""
@@ -722,17 +632,9 @@ class MonitoringApp:
             # Очищаем кэш Hugging Face API
             self.clear_hf_cache()
             
-            # Останавливаем мониторинг строк
-            if self.lines_monitoring_running:
-                stop_force_capture()
-                self.lines_monitoring_running = False
-                logger.info("Мониторинг строк остановлен")
-            
-            # Останавливаем RBK и MIR24
-            if self.rbk_mir24_running:
-                stop_rbk_mir24()
-                self.rbk_mir24_running = False
-                logger.info("RBK и MIR24 остановлены")
+            # Очищаем ресурсы менеджера RBK и MIR24
+            if hasattr(self, 'rbk_mir24_manager'):
+                self.rbk_mir24_manager.cleanup()
             
             # Останавливаем распознавание crop-видео
             if self.video_recognition_running:
@@ -1084,51 +986,18 @@ Example responses:
 
     def _start_r1_monitoring(self):
         """Запуск мониторинга строк для канала R1 по расписанию."""
-        try:
-            self.ui.update_status("Запуск мониторинга строк для R1 по расписанию...")
-            self.lines_monitoring_running = True
-            start_force_capture()
-            thread = threading.Thread(target=start_lines_monitoring, daemon=True)
-            thread.start()
-            self.lines_monitoring_thread = thread
-            self.ui.update_lines_status("Запущен (R1)")
-            logger.info("Запущен мониторинг строк для R1 по расписанию")
-        except Exception as e:
-            logger.error(f"Ошибка при запуске мониторинга строк для R1: {e}")
-            self.ui.update_status(f"Ошибка запуска мониторинга R1: {e}")
-            messagebox.showerror("Ошибка", f"Не удалось запустить мониторинг R1: {e}")
+        self.rbk_mir24_manager.start_scheduled_lines_monitoring(['R1'])
 
     def _start_zvezda_monitoring(self):
         """Запуск мониторинга строк для канала Zvezda по расписанию."""
-        try:
-            self.ui.update_status("Запуск мониторинга строк для Zvezda по расписанию...")
-            self.lines_monitoring_running = True
-            start_force_capture()
-            thread = threading.Thread(target=start_lines_monitoring, daemon=True)
-            thread.start()
-            self.lines_monitoring_thread = thread
-            self.ui.update_lines_status("Запущен (Zvezda)")
-            logger.info("Запущен мониторинг строк для Zvezda по расписанию")
-        except Exception as e:
-            logger.error(f"Ошибка при запуске мониторинга строк для Zvezda: {e}")
-            self.ui.update_status(f"Ошибка запуска мониторинга Zvezda: {e}")
-            messagebox.showerror("Ошибка", f"Не удалось запустить мониторинг Zvezda: {e}")
+        self.rbk_mir24_manager.start_scheduled_lines_monitoring(['Zvezda'])
 
     def _start_other_channels_monitoring(self):
         """Запуск мониторинга строк для других каналов по расписанию (TVC, RenTV, NTV)."""
-        try:
-            self.ui.update_status("Запуск мониторинга строк для канала по расписанию...")
-            self.lines_monitoring_running = True
-            start_force_capture()
-            thread = threading.Thread(target=start_lines_monitoring, daemon=True)
-            thread.start()
-            self.lines_monitoring_thread = thread
-            self.ui.update_lines_status("Запущен (другой канал)")
-            logger.info("Запущен мониторинг строк для другого канала по расписанию")
-        except Exception as e:
-            logger.error(f"Ошибка при запуске мониторинга строк для другого канала: {e}")
-            self.ui.update_status(f"Ошибка запуска мониторинга: {e}")
-            messagebox.showerror("Ошибка", f"Не удалось запустить мониторинг: {e}")
+        # Определяем канал из контекста планировщика
+        # Поскольку этот метод используется для нескольких каналов, 
+        # мы не можем точно определить канал, поэтому используем общий подход
+        self.rbk_mir24_manager.start_scheduled_lines_monitoring()
 
     def _check_and_start_idle_monitoring(self):
         """Заглушка для проверки и запуска idle-мониторинга (для планировщика)."""
@@ -1137,75 +1006,15 @@ Example responses:
 
     def _start_rbk_mir24_crop_recording(self):
         """Запуск записи crop-видео для RBK и MIR24 по расписанию."""
-        def run_and_process():
-            try:
-                video_channels = ['RBK', 'MIR24']
-                future = asyncio.run_coroutine_threadsafe(
-                    process_rbk_mir24(self, self.ui, True, channels=video_channels, force_crop=False),
-                    self.loop
-                )
-                self.ui.update_rbk_mir24_status("Запущен (по расписанию)")
-                logger.info("Запущена запись crop-видео для RBK и MIR24 по расписанию")
-                # Дождаться завершения записи
-                future.result()
-                logger.info("Запись crop-видео для RBK и MIR24 завершена, запускается распознавание и отправка видео...")
-                # Запускать обработку и отправку видео потокобезопасно для UI
-                if hasattr(self, "ui") and hasattr(self.ui, "root"):
-                    self.ui.root.after(0, self.check_and_send_videos)
-                else:
-                    self.check_and_send_videos()
-            except Exception as e:
-                logger.error(f"Ошибка при запуске записи crop-видео по расписанию: {e}")
-                self.ui.update_rbk_mir24_status("Ошибка")
-        threading.Thread(target=run_and_process, daemon=True).start()
+        self.rbk_mir24_manager.start_scheduled_crop_recording(['RBK', 'MIR24'])
 
     def _start_rbk_mir24_lines_monitoring(self):
         """Запуск мониторинга строк (скриншотов) для RBK и MIR24 по расписанию и автоматическая обработка после завершения."""
-        def run_and_process():
-            try:
-                self.ui.update_status("Запуск мониторинга строк для RBK и MIR24 по расписанию...")
-                self.lines_monitoring_running = True
-                start_force_capture()
-                thread = threading.Thread(target=start_lines_monitoring, daemon=True)
-                thread.start()
-                self.lines_monitoring_thread = thread
-                self.ui.update_lines_status("Запущен (RBK+MIR24)")
-                logger.info("Запущен мониторинг строк для RBK и MIR24 по расписанию")
-                timer = threading.Timer(VIDEO_DURATION, self.stop_lines_monitoring)
-                timer.start()
-                thread.join()
-                timer.cancel()
-                logger.info("Мониторинг строк для RBK и MIR24 завершён, запускается обработка скриншотов...")
-                self.save_and_send_lines()
-            except Exception as e:
-                logger.error(f"Ошибка при запуске мониторинга строк для RBK и MIR24: {e}")
-                self.ui.update_status(f"Ошибка запуска мониторинга RBK и MIR24: {e}")
-                messagebox.showerror("Ошибка", f"Не удалось запустить мониторинг RBK и MIR24: {e}")
-        threading.Thread(target=run_and_process, daemon=True).start()
+        self.rbk_mir24_manager.start_scheduled_lines_monitoring(['RBK', 'MIR24'])
 
     def _start_channel_lines_monitoring(self, channel):
         """Запуск мониторинга строк (скриншотов) для указанного канала по расписанию и автоматическая обработка после завершения."""
-        def run_and_process():
-            try:
-                self.ui.update_status(f"Запуск мониторинга строк для {channel} по расписанию...")
-                self.lines_monitoring_running = True
-                start_force_capture()
-                thread = threading.Thread(target=start_lines_monitoring, daemon=True)
-                thread.start()
-                self.lines_monitoring_thread = thread
-                self.ui.update_lines_status(f"Запущен ({channel})")
-                logger.info(f"Запущен мониторинг строк для {channel} по расписанию")
-                timer = threading.Timer(VIDEO_DURATION, self.stop_lines_monitoring)
-                timer.start()
-                thread.join()
-                timer.cancel()
-                logger.info(f"Мониторинг строк для {channel} завершён, запускается обработка скриншотов...")
-                self.save_and_send_lines()
-            except Exception as e:
-                logger.error(f"Ошибка при запуске мониторинга строк для {channel}: {e}")
-                self.ui.update_status(f"Ошибка запуска мониторинга {channel}: {e}")
-                messagebox.showerror("Ошибка", f"Не удалось запустить мониторинг {channel}: {e}")
-        threading.Thread(target=run_and_process, daemon=True).start()
+        self.rbk_mir24_manager.start_scheduled_lines_monitoring([channel])
 
     def _cleanup_old_sent_texts(self):
         """Удаляет устаревшие файлы sent_texts_YYYYMMDD.txt, кроме текущего дня."""
