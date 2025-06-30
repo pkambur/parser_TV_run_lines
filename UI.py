@@ -567,6 +567,22 @@ class MonitoringUI:
         settings_win.transient(self.root)
         settings_win.grab_set()
 
+        # Добавляем скроллируемый Canvas для всего окна настроек
+        settings_canvas = tk.Canvas(settings_win, borderwidth=0, background="#f8f8f8")
+        settings_scrollbar = tk.Scrollbar(settings_win, orient="vertical", command=settings_canvas.yview)
+        settings_canvas.configure(yscrollcommand=settings_scrollbar.set)
+        settings_scrollbar.pack(side="right", fill="y")
+        settings_canvas.pack(side="left", fill="both", expand=True)
+        inner_frame = tk.Frame(settings_canvas, background="#f8f8f8")
+        settings_canvas.create_window((0, 0), window=inner_frame, anchor="nw")
+        def _on_frame_configure(event):
+            settings_canvas.configure(scrollregion=settings_canvas.bbox("all"))
+        inner_frame.bind("<Configure>", _on_frame_configure)
+        # Для колесика мыши
+        def _on_mousewheel(event):
+            settings_canvas.yview_scroll(int(-1*(event.delta/120)), "units")
+        settings_win.bind_all("<MouseWheel>", _on_mousewheel)
+
         # Загрузка каналов
         try:
             with CHANNELS_FILE.open('r', encoding='utf-8') as f:
@@ -584,13 +600,12 @@ class MonitoringUI:
         default_duration_var = tk.StringVar()
         special_durations_var = tk.StringVar()
 
-        # 2. Создаем виджеты
-        tk.Label(settings_win, text="Выберите канал или добавьте новый:").pack(pady=5)
-        channel_combo = ttk.Combobox(settings_win, values=channel_names, textvariable=channel_var, state="normal")
+        # 2. Создаем виджеты (теперь во внутреннем inner_frame)
+        tk.Label(inner_frame, text="Выберите канал или добавьте новый:").pack(pady=5)
+        channel_combo = ttk.Combobox(inner_frame, values=channel_names, textvariable=channel_var, state="normal")
         channel_combo.pack(fill="x", padx=20)
-        
         # --- Общие параметры ---
-        general_frame = ttk.LabelFrame(settings_win, text="Общие параметры", padding=10)
+        general_frame = ttk.LabelFrame(inner_frame, text="Общие параметры", padding=10)
         general_frame.pack(fill="x", padx=20, pady=5, expand=True)
         tk.Label(general_frame, text="Название телеканала:").pack(anchor="w")
         name_entry = tk.Entry(general_frame, textvariable=name_var)
@@ -604,9 +619,8 @@ class MonitoringUI:
         tk.Label(general_frame, text="Интервал (например, 1/7):").pack(anchor="w")
         interval_entry = tk.Entry(general_frame, textvariable=interval_var)
         interval_entry.pack(fill="x")
-
         # --- Параметры длительности ---
-        duration_frame = ttk.LabelFrame(settings_win, text="Параметры длительности записи (сюжеты)", padding=10)
+        duration_frame = ttk.LabelFrame(inner_frame, text="Параметры длительности записи (сюжеты)", padding=10)
         duration_frame.pack(fill="x", padx=20, pady=5, expand=True)
         tk.Label(duration_frame, text="Длительность выпуска по умолчанию (мин):").pack(anchor="w")
         default_duration_entry = tk.Entry(duration_frame, textvariable=default_duration_var)
@@ -614,19 +628,37 @@ class MonitoringUI:
         tk.Label(duration_frame, text="Особые длительности (формат: 14:00=20, 18:00=20):").pack(anchor="w")
         special_durations_entry = tk.Entry(duration_frame, textvariable=special_durations_var)
         special_durations_entry.pack(fill="x")
-
         # --- Расписание ---
-        schedule_frame = ttk.LabelFrame(settings_win, text="Расписание", padding=10)
+        schedule_frame = ttk.LabelFrame(inner_frame, text="Расписание", padding=10)
         schedule_frame.pack(fill="x", padx=20, pady=5, expand=True)
         tk.Label(schedule_frame, text="Время мониторинга строк (lines, через запятую или с новой строки):").pack(anchor="w")
         lines_text = tk.Text(schedule_frame, height=3)
         lines_text.pack(fill="x")
-
         # --- Сообщения об ошибках ---
-        error_frame = ttk.LabelFrame(settings_win, text="Сообщения об ошибках", padding=10)
+        error_frame = ttk.LabelFrame(inner_frame, text="Сообщения об ошибках", padding=10)
         error_frame.pack(fill="x", padx=20, pady=5, expand=True)
         error_label = tk.Label(error_frame, text="", fg="red", wraplength=550)
         error_label.pack(fill="x")
+        # --- Секция конфигурации токенов и рассылки ---
+        config_frame = ttk.LabelFrame(inner_frame, text="Конфигурация токенов и рассылки", padding=10)
+        config_frame.pack(fill="x", padx=20, pady=5, expand=True)
+        # Теперь поля всегда пустые по умолчанию
+        telegram_token_var = tk.StringVar(value="")
+        chat_ids_var = tk.StringVar(value="")
+        hf_api_token_var = tk.StringVar(value="")
+        hf_token_var = tk.StringVar(value="")
+        tk.Label(config_frame, text="Telegram Bot Token:").pack(anchor="w")
+        telegram_token_entry = tk.Entry(config_frame, textvariable=telegram_token_var)
+        telegram_token_entry.pack(fill="x", pady=(0, 5))
+        tk.Label(config_frame, text="Telegram Chat IDs (через запятую):").pack(anchor="w")
+        chat_ids_entry = tk.Entry(config_frame, textvariable=chat_ids_var)
+        chat_ids_entry.pack(fill="x", pady=(0, 5))
+        tk.Label(config_frame, text="Hugging Face API Token:").pack(anchor="w")
+        hf_api_token_entry = tk.Entry(config_frame, textvariable=hf_api_token_var)
+        hf_api_token_entry.pack(fill="x", pady=(0, 5))
+        tk.Label(config_frame, text="Hugging Face Token:").pack(anchor="w")
+        hf_token_entry = tk.Entry(config_frame, textvariable=hf_token_var)
+        hf_token_entry.pack(fill="x", pady=(0, 5))
 
         def clear_error():
             """Очищает сообщение об ошибке"""
@@ -1040,30 +1072,10 @@ class MonitoringUI:
         # Кнопки
         button_frame = tk.Frame(settings_win)
         button_frame.pack(pady=15)
-        
         save_btn = tk.Button(button_frame, text="Сохранить", command=save_channel, bg="#4CAF50", fg="white")
         save_btn.pack(side="left", padx=5)
-        
         cancel_btn = tk.Button(button_frame, text="Отмена", command=settings_win.destroy, bg="#f44336", fg="white")
         cancel_btn.pack(side="left", padx=5)
-        
-        # Привязываем валидацию к полям ввода
-        def on_field_change(*args):
-            """Вызывается при изменении любого поля для очистки ошибок"""
-            clear_error()
-        
-        name_var.trace('w', on_field_change)
-        url_var.trace('w', on_field_change)
-        crop_var.trace('w', on_field_change)
-        interval_var.trace('w', on_field_change)
-        default_duration_var.trace('w', on_field_change)
-        special_durations_var.trace('w', on_field_change)
-        
-        # Привязываем валидацию к текстовому полю
-        def on_text_change(event=None):
-            clear_error()
-        
-        lines_text.bind('<KeyRelease>', on_text_change)
 
     def _add_tooltip(self, widget, text):
         """

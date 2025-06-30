@@ -298,6 +298,44 @@ class ConfigManager:
         self.load_keywords(force_reload=True)
         logger.info("Все конфигурационные файлы перезагружены")
 
+    def load_config(self) -> Dict[str, Any]:
+        """
+        Загружает конфиг из config.json (токены, chat_ids и др.).
+        Возвращает словарь с конфигом или пустой словарь при ошибке.
+        """
+        config_file = Path(get_resource_path('config.json', ''))
+        if not config_file.exists():
+            logger.warning("Файл config.json не найден")
+            return {}
+        try:
+            with config_file.open('r', encoding='utf-8') as f:
+                config = json.load(f)
+            logger.info("Конфиг config.json успешно загружен")
+            return config
+        except Exception as e:
+            logger.error(f"Ошибка при загрузке config.json: {e}")
+            return {}
+
+    def save_config(self, config: Dict[str, Any]) -> bool:
+        """
+        Сохраняет словарь config в config.json. Возвращает True при успехе.
+        """
+        config_file = Path(get_resource_path('config.json', ''))
+        try:
+            # Создаем резервную копию
+            if config_file.exists():
+                backup_path = config_file.with_suffix('.json.bak')
+                import shutil
+                shutil.copy2(str(config_file), str(backup_path))
+                logger.info(f"Создана резервная копия: {backup_path}")
+            with config_file.open('w', encoding='utf-8') as f:
+                json.dump(config, f, ensure_ascii=False, indent=2)
+            logger.info("Конфиг config.json успешно сохранён")
+            return True
+        except Exception as e:
+            logger.error(f"Ошибка при сохранении config.json: {e}")
+            return False
+
 # Глобальный экземпляр менеджера конфигурации
 config_manager = ConfigManager()
 
